@@ -1,0 +1,11 @@
+let x: i64 = 10
+
+// TODO: Try and parse args
+let a := proc(a1: string, a2: i64) {
+  while true {
+    print(a1, a2 + x)
+    break
+  }
+}
+
+a()

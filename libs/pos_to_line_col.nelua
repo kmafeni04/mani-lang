@@ -1,0 +1,13 @@
+local function pos_to_line_col(pos: integer, content: string): (integer, integer)
+  local s_line = 1
+  local pos_at_line = 0
+  local text = content:sub(1, pos)
+  for line in text:gmatch("[^\r\n]*\r?\n") do
+    pos_at_line = pos_at_line + #line
+    s_line = s_line + 1
+  end
+  local s_col = pos - pos_at_line
+  return s_line, s_col
+end
+
+return pos_to_line_col
