@@ -1,3 +1,5 @@
+-- FIX: print function definitions that happen inside of regular functions should all happen outside
+
 require "stringbuilder"
 require "os"
 require "arg"
@@ -14,7 +16,6 @@ local AnsiColor = require 'ansicolor-nelua.ansicolor'
 local pos_to_line_col = require "libs.pos_to_line_col"
 
 ## local function range_check(val, enum_type)
-  -- ## static_assert(traits.is_string(type))
   assert(#[val]# > 0)
   assert(#[val]# < #[enum_type]#._COUNT)
 ## end
@@ -104,6 +105,7 @@ local TokenKind = @enum{
   KEYWORD_WHILE,
   KEYWORD_FOR,
   KEYWORD_BREAK,
+  KEYWORD_RETURN,
   CONSTANT_TRUE,
   CONSTANT_FALSE,
   CONSTANT_NIL,
@@ -128,7 +130,7 @@ local binary_operators = map!(TokenKind, TokenKind, {
   [TokenKind.MINUS] = TokenKind.MINUS,
 })
 
-local builtin_procs= map!(string, string, {
+local builtin_procs = map!(string, string, {
   ["print"] = "print",
 })
 
@@ -154,7 +156,7 @@ local function tokenize(path: string, content: string): TokenizeResult
 
     if current_char:match("%s") then
       -- Skip white space
-    elseif current_char == "/" and next_char == "/" then
+    elseif current_char == "#" then
       local start = index
       local s_line, s_col = pos_to_line_col(start, content)
       local sb: stringbuilder
@@ -331,12 +333,16 @@ local function tokenize(path: string, content: string): TokenizeResult
         ttype = TokenKind.KEYWORD_FOR
       elseif word == "break" then
         ttype = TokenKind.KEYWORD_BREAK
+      elseif word == "return" then
+        ttype = TokenKind.KEYWORD_RETURN
+
       elseif word == "true" then
         ttype = TokenKind.CONSTANT_TRUE
       elseif word == "false" then
         ttype = TokenKind.CONSTANT_FALSE
       elseif word == "nil" then
         ttype = TokenKind.CONSTANT_NIL
+
       else
         ttype = TokenKind.IDENTIFIER
       end
@@ -606,14 +612,18 @@ function Parser:peek_one_of(token_kinds: sequence(TokenKind)): ExpectResult
   end
 
   local sb: stringbuilder
-  sb:write("Expected one of TokenKinds '{ ")
-  for _, token_kind in  ipairs(token_kinds) do
-    range_check!(token_kind, TokenKind)
-    sb:write(TokenKind_tostring(token_kind))
-    sb:write(", ")
+  if #token_kinds == 1 then
+    sb:write("Expected TokenKind '", TokenKind_tostring(token_kinds[1]), "' but got '", TokenKind_tostring(token.kind), "'")
+  else
+    sb:write("Expected one of TokenKinds '{ ")
+    for _, token_kind in  ipairs(token_kinds) do
+      range_check!(token_kind, TokenKind)
+      sb:write(TokenKind_tostring(token_kind))
+      sb:write(", ")
+    end
+    sb:rollback(2)
+    sb:write(" }' but got '", TokenKind_tostring(token.kind), "'")
   end
-  sb:rollback(2)
-  sb:write(" }' but got '", TokenKind_tostring(token.kind), "'")
 
   return ExpectResult.err{
     path = self.path,
@@ -641,554 +651,6 @@ end
 
 function Parser:expect(token_kind: TokenKind): ExpectResult
   return self:expect_one_of({ token_kind })
-end
-
-
-local Node <forwarddecl> = @record{}
-
-local ScopeNodeInfo = @record{
-  content: string,
-}
-
-local ProcDefInfo = @record{
-  params: sequence(*Node),
-  return_type: string,
-}
-## for _, field in ipairs(ScopeNodeInfo.value.fields) do
-  ## ProcDefInfo.value:add_field(field.name, field.type, #ProcDefInfo.value.fields + 1)
-## end
-
-local WhileLoopInfo = @record{
-  cond: *Node
-}
-## for _, field in ipairs(ScopeNodeInfo.value.fields) do
-  ## WhileLoopInfo.value:add_field(field.name, field.type, #WhileLoopInfo.value.fields + 1)
-## end
-
-local IdDeclInfo = @record{
-  name: string,
-  value: *Node,
-  used: boolean
-}
-
-local IdInfo = @record{
-  name: string,
-}
-
-local BinaryOpInfo = @record{
-  lhs: *Node,
-  op: string,
-  rhs: *Node,
-}
-
-local LiteralInfo = @record{
-  value: string
-}
-
-local ProcCallInfo = @record{
-  name: string,
-  args: sequence(*Node),
-}
-
-local NodeKind = @enum{
-  _UNDEFINED = 0,
-  AST,
-  ASSIGNMENT,
-  SCOPE,
-  PROC_DEF,
-  PROC_CALL,
-  ID_DECL,
-  WHILE_LOOP,
-  FOR_LOOP,
-  BREAK,
-  COMMENT,
-  LITERAL,
-  ID,
-  BINARY_OP,
-  _COUNT
-}
-
-local function NodeKind_tostring(kind: NodeKind): string
-  range_check!(kind, NodeKind)
-  ## for _, field in ipairs(NodeKind.value.fields) do
-    if #[field.value]# == kind then
-      return #[field.name]#
-    end
-  ## end
-  error("UNREACHABLE")
-  return ""
-end
-
-Node = @record{
-  s_pos: Pos,
-  e_pos: Pos,
-  s_index: integer,
-  e_index: integer,
-  scope: *Node,
-  kind: NodeKind,
-  info: union{
-    scope: ScopeNodeInfo,
-    id_decl: IdDeclInfo,
-    id: IdInfo,
-    binary_op: BinaryOpInfo,
-    literal: LiteralInfo,
-    proc_def: ProcDefInfo,
-    proc_call: ProcCallInfo,
-    while_loop: WhileLoopInfo
-  },
-  children: sequence(*Node),
-  type: string
-}
-
-function Node:is_scope(): boolean
-  range_check!(self.kind, NodeKind)
-
-  switch self.kind do
-    case
-      NodeKind.AST,
-      NodeKind.SCOPE,
-      NodeKind.WHILE_LOOP,
-      NodeKind.PROC_DEF
-    then
-      return true
-    else
-      return false
-  end
-end
-
-local function new_number_literal(number: string, token: Token, scope: *Node): *Node
-  assert(scope and scope:is_scope())
-
-  local num_type = tostring(number):match("[%.eE]") and "f64" or "i64"
-  local val: string = num_type == "i64" and tostring(tointeger(number)) or tostring(tonumber(number))
-
-  local node = new(Node)
-
-  $node = {
-    s_pos = {
-      line = token.s_pos.line,
-      col = token.s_pos.col,
-    },
-    e_pos = {
-      line = token.e_pos.line,
-      col = token.e_pos.col,
-    },
-    s_index = token.s_index,
-    e_index = token.e_index,
-    info = {
-      literal = {
-        value = val,
-      }
-    },
-    kind = NodeKind.LITERAL,
-    scope = scope,
-    type = num_type,
-  }
-
-  return node
-end
-
-local function new_string_literal(token: Token, scope: *Node): *Node
-  assert(scope and scope:is_scope())
-
-  local node = new(Node)
-
-  $node = {
-    s_pos = {
-      line = token.s_pos.line,
-      col = token.s_pos.col,
-    },
-    e_pos = {
-      line = token.e_pos.line,
-      col = token.e_pos.col,
-    },
-    s_index = token.s_index,
-    e_index = token.e_index,
-    info = {
-      literal = {
-        value = token.value,
-      }
-    },
-    kind = NodeKind.LITERAL,
-    scope = scope,
-    type = "string",
-  }
-
-  return node
-end
-
-local function new_boolean_literal(token: Token, scope: *Node): *Node
-  assert(scope and scope:is_scope())
-
-  local node = new(Node)
-
-  $node = {
-    s_pos = {
-      line = token.s_pos.line,
-      col = token.s_pos.col,
-    },
-    e_pos = {
-      line = token.e_pos.line,
-      col = token.e_pos.col,
-    },
-    s_index = token.s_index,
-    e_index = token.e_index,
-    info = {
-      literal = {
-        value = token.value,
-      }
-    },
-    kind = NodeKind.LITERAL,
-    scope = scope,
-    type = "boolean",
-  }
-
-  return node
-end
-
-local ParseResult = @Result(*Node, ErrLoc)
-
-local Parser.parse_scope: function(self: *Parser, scope: *Node, till: TokenKind): ParseResult
-
-function Parser.find_id_up_scope(scope: *Node, name: string, s_index: integer): Option(*Node)
-  assert(scope and scope:is_scope())
-
-  for _, node in ipairs(scope.children) do
-    if node.kind == NodeKind.ID_DECL and node.info.id_decl.name == name and node.s_index <= s_index then
-      return Option.Some(node)
-    end
-  end
-
-  if scope.scope then
-    return Parser.find_id_up_scope(scope.scope, name, s_index)
-  end
-  return Option.None()
-end
-
-function Parser:parse_proc_def(scope: *Node): ParseResult
-  assert(scope and scope:is_scope())
-
-  local expect_res = self:expect(TokenKind.KEYWORD_PROC)
-  if expect_res:is_err() then
-    return ParseResult.err(expect_res:get_err())
-  end
-  local token = expect_res:get_ok()
-
-  local proc_def_node = new(Node)
-
-  $proc_def_node = {
-    s_pos = {
-      line = token.s_pos.line,
-      col = token.s_pos.col,
-    },
-    s_index = token.s_index,
-    e_index = 0,
-    kind = NodeKind.PROC_DEF,
-    scope = scope,
-  }
-
-  expect_res  = self:expect(TokenKind.OPEN_PAREN)
-  if expect_res:is_err() then
-    return ParseResult.err(expect_res:get_err())
-  end
-
-  expect_res = self:expect(TokenKind.CLOSE_PAREN)
-  if expect_res:is_err() then
-    return ParseResult.err(expect_res:get_err())
-  end
-
-  expect_res = self:expect(TokenKind.OPEN_CURLY)
-  if expect_res:is_err() then
-    return ParseResult.err(expect_res:get_err())
-  end
-
-  while self:peek().kind ~= TokenKind.EOF do
-    local parse_res = self:parse_scope(proc_def_node, TokenKind.CLOSE_CURLY)
-    if parse_res:is_err() then
-      return parse_res
-    else
-      break
-    end
-  end
-
-  local token = self:peek()
-  if token.kind ~= TokenKind.CLOSE_CURLY then
-    return ParseResult.err({
-      path = self.path,
-      content = self.content,
-      s_index = token.s_index,
-      e_index = token.e_index,
-      err = ("Expected Token '%s' but got '%s'"):format(TokenKind_tostring(TokenKind.CLOSE_CURLY), TokenKind_tostring(token.kind)),
-      kind = ErrLocKind.ERROR,
-      s_pos = {
-        line = token.s_pos.line,
-        col = token.s_pos.col,
-      },
-      e_pos = {
-        line = token.e_pos.line,
-        col = token.e_pos.col,
-      },
-    })
-  end
-  self:advance()
-
-  proc_def_node.e_index = token.e_index
-  proc_def_node.e_pos = {
-    line = token.e_pos.line,
-    col = token.e_pos.col,
-  }
-  proc_def_node.info = {
-    proc_def = {
-      content = self.content:sub(proc_def_node.s_index, proc_def_node.e_index),
-      params = {},
-      return_type = "void",
-    }
-  }
-  proc_def_node.type = "proc_def"
-
-  return ParseResult.ok(proc_def_node)
-end
-
-function Parser:parse_expr(scope: *Node, lhs: *Node): ParseResult
-  assert(scope and scope:is_scope())
-
-  local expect_res = self:peek_one_of({
-    TokenKind.CONSTANT_TRUE,
-    TokenKind.CONSTANT_FALSE,
-    TokenKind.CONSTANT_NIL,
-    TokenKind.STRING,
-    TokenKind.NUMBER,
-    TokenKind.IDENTIFIER,
-    TokenKind.KEYWORD_PROC,
-    TokenKind.PLUS,
-    TokenKind.MINUS,
-  })
-  if expect_res:is_err() then
-    return ParseResult.err(expect_res:get_err())
-  end
-  local token = expect_res:get_ok()
-
-  local parse_res: ParseResult = _switch!(token.kind, {
-    [TokenKind.IDENTIFIER] = (do
-      self:advance()
-      local id_node: Option(*Node) = Parser.find_id_up_scope(scope, token.value, token.s_index)
-      if id_node:is_none() then
-        in ParseResult.err({
-          path = self.path,
-          content = self.content,
-          s_index = token.s_index,
-          e_index = token.e_index,
-          err = ("Undeclared identifier '%s'"):format(token.value),
-          kind = ErrLocKind.ERROR,
-          s_pos = {
-            line = token.s_pos.line,
-            col = token.s_pos.col,
-          },
-          e_pos = {
-            line = token.e_pos.line,
-            col = token.e_pos.col,
-          },
-        })
-      end
-
-      id_node:get_some().info.id_decl.used = true
-
-      local node: *Node = new(Node)
-      $node = {
-        s_pos = {
-          line = token.s_pos.line,
-          col = token.s_pos.col,
-        },
-        e_pos = {
-          line = token.e_pos.line,
-          col = token.e_pos.col,
-        },
-        s_index = token.s_index,
-        e_index = token.e_index,
-        info = {
-          id = {
-            name = token.value,
-          }
-        },
-        kind = NodeKind.ID,
-        type = id_node:get_some().type,
-        scope = scope,
-      }
-      in ParseResult.ok(node)
-    end),
-    [TokenKind.STRING] = (do
-      self:advance()
-      in ParseResult.ok(new_string_literal(token, scope))
-    end),
-    [TokenKind.NUMBER] = (do
-      self:advance()
-      in ParseResult.ok(new_number_literal(token.value, token, scope))
-    end),
-    [{ TokenKind.CONSTANT_TRUE, TokenKind.CONSTANT_FALSE }] = (do
-      self:advance()
-      in ParseResult.ok(new_boolean_literal(token, scope))
-    end),
-    [{ TokenKind.PLUS, TokenKind.MINUS }] = (do
-      self:advance()
-      local res: ParseResult
-      if lhs then
-        local parse_res = self:parse_expr(scope, lhs)
-        if parse_res:is_err() then
-          return parse_res
-        end
-        local rhs: *Node = parse_res:get_ok()
-        local node: *Node = new(Node)
-        $node = {
-          s_pos = {
-            line = lhs.s_pos.line,
-            col = lhs.s_pos.col,
-          },
-          e_pos = {
-            line = rhs.e_pos.line,
-            col = rhs.e_pos.col,
-          },
-          s_index = lhs.s_index,
-          e_index = rhs.e_index,
-          info = {
-            binary_op = {
-              lhs = lhs,
-              op = token.value,
-              rhs = rhs,
-            },
-          },
-          kind = NodeKind.BINARY_OP,
-          scope = scope,
-          type = "i64",
-        }
-        in ParseResult.ok(node)
-      end
-      local op: string = token.value
-      local expect_res = self:expect(TokenKind.NUMBER)
-      if expect_res:is_err() then
-        in ParseResult.err(expect_res:get_err())
-      end
-      in ParseResult.ok(new_number_literal(op .. token.value, token, scope))
-    end),
-    [TokenKind.KEYWORD_PROC] = self:parse_proc_def(scope),
-    _default = (do
-      error(("UNREACHABLE TokenKind '%s'"):format(TokenKind_tostring(token.kind)))
-      in ParseResult.err({})
-    end),
-  })
-  if parse_res:is_err() then
-    return parse_res
-  end
-
-  local node = parse_res:get_ok()
-
-  token = self:peek()
-  if binary_operators:has(token.kind) then
-    parse_res = self:parse_expr(scope, node)
-    if parse_res:is_err() then
-      return parse_res
-    end
-  end
-
-  return parse_res
-end
-
-function Parser:parse_id_decl(scope: *Node): ParseResult
-  assert(scope and scope:is_scope())
-
-  local expect_res = self:expect(TokenKind.KEYWORD_LET)
-  if expect_res:is_err() then
-    return ParseResult.err(expect_res:get_err())
-  end
-  local token = expect_res:get_ok()
-
-  local id_decl = new(Node)
-
-  $id_decl = {
-    s_pos = {
-      line = token.s_pos.line,
-      col = token.s_pos.col,
-    },
-    e_pos = {},
-    s_index = token.s_index,
-    kind = NodeKind.ID_DECL,
-    scope = scope,
-  }
-
-  expect_res = self:expect(TokenKind.IDENTIFIER)
-  if expect_res:is_err() then
-    return ParseResult.err(expect_res:get_err())
-  end
-  token = expect_res:get_ok()
-
-  local decl_name = token.value
-
-  expect_res = self:expect(TokenKind.COLON)
-  if expect_res:is_err() then
-    return ParseResult.err(expect_res:get_err())
-  end
-  token = expect_res:get_ok()
-
-  expect_res = self:expect_one_of({ TokenKind.IDENTIFIER, TokenKind.EQUALS })
-  if expect_res:is_err() then
-    return ParseResult.err(expect_res:get_err())
-  end
-  token = expect_res:get_ok()
-
-  local decl_type: string
-  if token.kind == TokenKind.IDENTIFIER then
-    decl_type = token.value
-  elseif token.kind == TokenKind.EQUALS then
-    goto equals
-  end
-
-  expect_res = self:expect(TokenKind.EQUALS)
-  if expect_res:is_err() then
-    return ParseResult.err(expect_res:get_err())
-  end
-  token = expect_res:get_ok()
-  ::equals::
-
-  local parse_res = self:parse_expr(scope)
-  if parse_res:is_err() then
-    return parse_res
-  end
-  local node = parse_res:get_ok()
-
-  if decl_type ~= "" and node.type ~= decl_type then
-    return ParseResult.err({
-      path = self.path,
-      content = self.content,
-      s_index = id_decl.s_index,
-      e_index = node.e_index,
-      err = ("Defined declaration type '%s' does not match value type '%s'"):format(decl_type, node.type),
-      kind = ErrLocKind.ERROR,
-      s_pos = {
-        line = id_decl.s_pos.line,
-        col = id_decl.s_pos.col,
-      },
-      e_pos = {
-        line = node.e_pos.line,
-        col = node.e_pos.col,
-      },
-    })
-  else
-    decl_type = node.type
-  end
-
-  id_decl.info = {
-    id_decl = {
-      name = decl_name,
-      value = node,
-    }
-  }
-  id_decl.type = decl_type
-  id_decl.e_index = node.e_index
-  id_decl.e_pos = {
-    line = node.e_pos.line,
-    col = node.e_pos.col,
-  }
-
-  return ParseResult.ok(id_decl)
 end
 
 function Parser:advance_comma_unless(token_kind: TokenKind): ExpectResult
@@ -1239,7 +701,489 @@ function Parser:advance_comma_unless(token_kind: TokenKind): ExpectResult
   return ExpectResult.ok(token)
 end
 
-function Parser:parse_proc_call(scope: *Node): ParseResult
+local Node <forwarddecl> = @record{}
+
+local NodeKind = @enum{
+  _UNDEFINED = 0,
+  AST,
+  ASSIGNMENT,
+  SCOPE,
+  PROC_DEF,
+  PROC_CALL,
+  ID_DECL,
+  WHILE_LOOP,
+  FOR_LOOP,
+  BREAK,
+  COMMENT,
+  LITERAL,
+  RETURN,
+  ID,
+  BINARY_OP,
+  _COUNT
+}
+
+local function NodeKind_tostring(kind: NodeKind): string
+  range_check!(kind, NodeKind)
+  ## for _, field in ipairs(NodeKind.value.fields) do
+    if #[field.value]# == kind then
+      return #[field.name]#
+    end
+  ## end
+  error("UNREACHABLE")
+  return ""
+end
+
+Node = @record{
+  kind: NodeKind,
+
+  s_pos: Pos,
+  e_pos: Pos,
+  s_index: integer,
+  e_index: integer,
+
+  name: string,
+  type: string,
+  children: sequence(*Node),
+  scope: *Node,
+
+  -- Scope
+  content: string,
+
+  -- ProcDef
+  params: sequence(*Node),
+  ret_t: string,
+
+  -- ProcCall
+  args: sequence(*Node),
+
+  -- BinOp
+  lhs: *Node,
+  op: string,
+  rhs: *Node,
+
+  -- WhileLoop
+  cond: *Node,
+
+  -- Literal
+  lit_val: string,
+
+  -- IdDecl
+  used: boolean,
+
+  val: *Node,
+
+}
+
+function Node:is_scope(): boolean
+  range_check!(self.kind, NodeKind)
+
+  switch self.kind do
+    case
+      NodeKind.AST,
+      NodeKind.SCOPE,
+      NodeKind.WHILE_LOOP,
+      NodeKind.PROC_DEF
+    then
+      return true
+    else
+      return false
+  end
+end
+
+local function new_number_literal(number: string, token: Token, scope: *Node): *Node
+  assert(scope and scope:is_scope())
+
+  local num_type = tostring(number):match("[%.eE]") and "f64" or "i64"
+  local val: string = num_type == "i64" and tostring(tointeger(number)) or tostring(tonumber(number))
+
+  local node = new(Node)
+
+  $node = {
+    kind = NodeKind.LITERAL,
+
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    e_pos = {
+      line = token.e_pos.line,
+      col = token.e_pos.col,
+    },
+    s_index = token.s_index,
+    e_index = token.e_index,
+    scope = scope,
+
+    type = num_type,
+    lit_val = val,
+  }
+
+  return node
+end
+
+local function new_string_literal(token: Token, scope: *Node): *Node
+  assert(scope and scope:is_scope())
+
+  local node = new(Node)
+
+  $node = {
+    kind = NodeKind.LITERAL,
+
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    e_pos = {
+      line = token.e_pos.line,
+      col = token.e_pos.col,
+    },
+    s_index = token.s_index,
+    e_index = token.e_index,
+    scope = scope,
+
+    type = "string",
+    lit_val = token.value,
+  }
+
+  return node
+end
+
+local function new_boolean_literal(token: Token, scope: *Node): *Node
+  assert(scope and scope:is_scope())
+
+  local node = new(Node)
+
+  $node = {
+    kind = NodeKind.LITERAL,
+
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    e_pos = {
+      line = token.e_pos.line,
+      col = token.e_pos.col,
+    },
+    s_index = token.s_index,
+    e_index = token.e_index,
+    scope = scope,
+
+    type = "boolean",
+    lit_val = token.value,
+  }
+
+  return node
+end
+
+local ParseResult = @Result(*Node, ErrLoc)
+
+local Parser.parse_scope: function(self: *Parser, scope: *Node, till: TokenKind): ParseResult
+local Parser.parse_id_decl: function(self: *Parser, scope: *Node): ParseResult
+local Parser.parse_proc_call: function(self: *Parser, scope: *Node): ParseResult
+
+function Parser.find_id_up_scope(scope: *Node, name: string, s_index: integer): Option(*Node)
+  assert(scope and scope:is_scope())
+
+  for _, node in ipairs(scope.children) do
+    if node.kind == NodeKind.ID_DECL and node.name == name and node.s_index <= s_index then
+      return Option.Some(node)
+    end
+  end
+
+  if scope.scope then
+    return Parser.find_id_up_scope(scope.scope, name, s_index)
+  end
+  return Option.None()
+end
+
+function Parser:parse_proc_def(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.KEYWORD_PROC)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local token = expect_res:get_ok()
+
+  local proc_def = new(Node)
+
+  $proc_def = {
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    s_index = token.s_index,
+    e_index = 0,
+    kind = NodeKind.PROC_DEF,
+    scope = scope,
+  }
+
+  expect_res  = self:expect(TokenKind.OPEN_PAREN)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  while self:peek().kind ~= TokenKind.CLOSE_PAREN do
+    local parse_res: ParseResult = self:parse_id_decl(scope)
+    if parse_res:is_err() then
+      return parse_res
+    end
+
+    local param = parse_res:get_ok()
+    proc_def.params:push(param)
+    proc_def.children:push(param)
+
+    expect_res = self:advance_comma_unless(TokenKind.CLOSE_PAREN)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
+  end
+
+  expect_res = self:expect(TokenKind.CLOSE_PAREN)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  local ret_t: string
+  if self:peek().kind == TokenKind.COLON then
+    token = self:advance()
+    expect_res = self:expect(TokenKind.IDENTIFIER)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
+    token = expect_res:get_ok()
+    ret_t = token.value
+  end
+
+  expect_res = self:expect(TokenKind.OPEN_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  while self:peek().kind ~= TokenKind.EOF do
+    local parse_res = self:parse_scope(proc_def, TokenKind.CLOSE_CURLY)
+    if parse_res:is_err() then
+      return parse_res
+    else
+      break
+    end
+  end
+
+  local function get_returns(scope: *Node, rets:*sequence(*Node))
+    assert(scope and scope:is_scope())
+    for _, child in ipairs(scope.children) do
+      if child.kind == NodeKind.RETURN then
+        rets:push(child)
+      end
+
+      if child:is_scope() then
+        get_returns(child, rets)
+      end
+    end
+  end
+
+  local rets: sequence(*Node)
+  get_returns(proc_def, rets)
+  for _, ret in ipairs(rets) do
+    local ret_stmt_val = ret.val
+    if ret_t ~= "" and ret_stmt_val.type ~= ret_t then
+      return ParseResult.err({
+        path = self.path,
+        content = self.content,
+        s_index = ret_stmt_val.s_index,
+        e_index = ret_stmt_val.e_index,
+        err = ("Return statement type '%s' does not match previously defined return type '%s'"):format(ret_stmt_val.type, ret_t),
+        kind = ErrLocKind.ERROR,
+        s_pos = {
+          line = ret_stmt_val.s_pos.line,
+          col = ret_stmt_val.s_pos.col,
+        },
+        e_pos = {
+          line = ret_stmt_val.e_pos.line,
+          col = ret_stmt_val.e_pos.col,
+        },
+      })
+    else
+      ret_t = ret_stmt_val.type
+    end
+  end
+
+  local token = self:peek()
+  if token.kind ~= TokenKind.CLOSE_CURLY then
+    return ParseResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = token.s_index,
+      e_index = token.e_index,
+      err = ("Expected Token '%s' but got '%s'"):format(TokenKind_tostring(TokenKind.CLOSE_CURLY), TokenKind_tostring(token.kind)),
+      kind = ErrLocKind.ERROR,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
+  self:advance()
+
+  if ret_t == "" then ret_t = "void" end
+
+  proc_def.e_index = token.e_index
+  proc_def.e_pos = {
+    line = token.e_pos.line,
+    col = token.e_pos.col,
+  }
+  proc_def.content = self.content:sub(proc_def.s_index, proc_def.e_index)
+  proc_def.ret_t = ret_t
+  proc_def.type = "proc_def"
+
+  return ParseResult.ok(proc_def)
+end
+
+function Parser:parse_expr(scope: *Node, lhs: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:peek_one_of({
+    TokenKind.CONSTANT_TRUE,
+    TokenKind.CONSTANT_FALSE,
+    TokenKind.CONSTANT_NIL,
+    TokenKind.STRING,
+    TokenKind.NUMBER,
+    TokenKind.IDENTIFIER,
+    TokenKind.KEYWORD_PROC,
+    TokenKind.PLUS,
+    TokenKind.MINUS,
+  })
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local token = expect_res:get_ok()
+
+  local parse_res: ParseResult = _switch!(token.kind, {
+    [TokenKind.IDENTIFIER] = (do
+      if self:peek_next().kind == TokenKind.OPEN_PAREN then
+        in self:parse_proc_call(scope)
+      end
+      self:advance()
+      local id_node: Option(*Node) = Parser.find_id_up_scope(scope, token.value, token.s_index)
+      if id_node:is_none() then
+        in ParseResult.err({
+          path = self.path,
+          content = self.content,
+          s_index = token.s_index,
+          e_index = token.e_index,
+          err = ("Undeclared identifier '%s'"):format(token.value),
+          kind = ErrLocKind.ERROR,
+          s_pos = {
+            line = token.s_pos.line,
+            col = token.s_pos.col,
+          },
+          e_pos = {
+            line = token.e_pos.line,
+            col = token.e_pos.col,
+          },
+        })
+      end
+
+      id_node:get_some().used = true
+
+      local node: *Node = new(Node)
+      $node = {
+        kind = NodeKind.ID,
+        s_pos = {
+          line = token.s_pos.line,
+          col = token.s_pos.col,
+        },
+        e_pos = {
+          line = token.e_pos.line,
+          col = token.e_pos.col,
+        },
+        s_index = token.s_index,
+        e_index = token.e_index,
+
+        name = token.value,
+        type = id_node:get_some().type,
+        scope = scope,
+      }
+      in ParseResult.ok(node)
+    end),
+    [TokenKind.STRING] = (do
+      self:advance()
+      in ParseResult.ok(new_string_literal(token, scope))
+    end),
+    [TokenKind.NUMBER] = (do
+      self:advance()
+      in ParseResult.ok(new_number_literal(token.value, token, scope))
+    end),
+    [{ TokenKind.CONSTANT_TRUE, TokenKind.CONSTANT_FALSE }] = (do
+      self:advance()
+      in ParseResult.ok(new_boolean_literal(token, scope))
+    end),
+    [{ TokenKind.PLUS, TokenKind.MINUS }] = (do
+      self:advance()
+      local res: ParseResult
+      if lhs then
+        local parse_res = self:parse_expr(scope, lhs)
+        if parse_res:is_err() then
+          return parse_res
+        end
+        local rhs: *Node = parse_res:get_ok()
+        local node: *Node = new(Node)
+        $node = {
+          kind = NodeKind.BINARY_OP,
+
+          s_pos = {
+            line = lhs.s_pos.line,
+            col = lhs.s_pos.col,
+          },
+          e_pos = {
+            line = rhs.e_pos.line,
+            col = rhs.e_pos.col,
+          },
+          s_index = lhs.s_index,
+          e_index = rhs.e_index,
+          scope = scope,
+
+          type = "i64",
+          lhs = lhs,
+          op = token.value,
+          rhs = rhs,
+        }
+        in ParseResult.ok(node)
+      end
+      local op: string = token.value
+      local expect_res = self:expect(TokenKind.NUMBER)
+      if expect_res:is_err() then
+        in ParseResult.err(expect_res:get_err())
+      end
+      in ParseResult.ok(new_number_literal(op .. token.value, token, scope))
+    end),
+    [TokenKind.KEYWORD_PROC] = self:parse_proc_def(scope),
+    _default = (do
+      error(("UNREACHABLE TokenKind '%s'"):format(TokenKind_tostring(token.kind)))
+      in ParseResult.err({})
+    end),
+  })
+  if parse_res:is_err() then
+    return parse_res
+  end
+
+  local node = parse_res:get_ok()
+
+  token = self:peek()
+  if binary_operators:has(token.kind) then
+    parse_res = self:parse_expr(scope, node)
+    if parse_res:is_err() then
+      return parse_res
+    end
+  end
+
+  return parse_res
+end
+
+Parser.parse_id_decl = function(self:*Parser, scope: *Node): ParseResult
   assert(scope and scope:is_scope())
 
   local expect_res = self:expect(TokenKind.IDENTIFIER)
@@ -1248,8 +1192,104 @@ function Parser:parse_proc_call(scope: *Node): ParseResult
   end
   local token = expect_res:get_ok()
 
-  local proc_id_node = Parser.find_id_up_scope(scope, token.value, token.s_index)
-  if not proc_id_node and not builtin_procs:has(token.value) then
+  local decl_name = token.value
+
+  local id_decl = new(Node)
+
+  $id_decl = {
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    e_pos = {},
+    s_index = token.s_index,
+    kind = NodeKind.ID_DECL,
+    scope = scope,
+  }
+
+  expect_res = self:expect(TokenKind.COLON)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  token = expect_res:get_ok()
+
+  token = self:advance()
+
+  local decl_type: string, node: *Node
+  if token.kind == TokenKind.IDENTIFIER then
+    decl_type = token.value
+    if self:peek().kind == TokenKind.EQUALS then
+      token = self:advance()
+      local parse_res = self:parse_expr(scope)
+      if parse_res:is_err() then
+        return parse_res
+      end
+      node = parse_res:get_ok()
+    end
+  elseif token.kind == TokenKind.EQUALS then
+    local parse_res = self:parse_expr(scope)
+    if parse_res:is_err() then
+      return parse_res
+    end
+    node = parse_res:get_ok()
+  else
+    error(("Unexpected node kind '%s'"):format(TokenKind_tostring(token.kind)))
+  end
+
+  if node then
+    if decl_type ~= "" and node.type ~= decl_type then
+      return ParseResult.err({
+        path = self.path,
+        content = self.content,
+        s_index = id_decl.s_index,
+        e_index = node.e_index,
+        err = ("Defined declaration type '%s' does not match value type '%s'"):format(decl_type, node.type),
+        kind = ErrLocKind.ERROR,
+        s_pos = {
+          line = id_decl.s_pos.line,
+          col = id_decl.s_pos.col,
+        },
+        e_pos = {
+          line = node.e_pos.line,
+          col = node.e_pos.col,
+        },
+      })
+    else
+      decl_type = node.type
+    end
+  end
+
+  id_decl.name = decl_name
+  id_decl.val = node
+  id_decl.type = decl_type
+  if node then
+    id_decl.e_index = node.e_index
+    id_decl.e_pos = {
+      line = node.e_pos.line,
+      col = node.e_pos.col,
+    }
+  else
+    id_decl.e_index = token.e_index
+    id_decl.e_pos = {
+      line = token.e_pos.line,
+      col = token.e_pos.col,
+    }
+  end
+
+  return ParseResult.ok(id_decl)
+end
+
+Parser.parse_proc_call = function(self: *Parser, scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.IDENTIFIER)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local token = expect_res:get_ok()
+
+  local proc_id_option = Parser.find_id_up_scope(scope, token.value, token.s_index)
+  if not proc_id_option and not builtin_procs:has(token.value) then
     return ParseResult.err({
       path = self.path,
       content = self.content,
@@ -1268,13 +1308,13 @@ function Parser:parse_proc_call(scope: *Node): ParseResult
     })
   end
 
-  if proc_id_node:is_some() and proc_id_node:get_some().type ~= "proc_def" then
+  if proc_id_option:is_some() and proc_id_option:get_some().type ~= "proc_def" then
     return ParseResult.err({
       path = self.path,
       content = self.content,
       s_index = token.s_index,
       e_index = token.e_index,
-      err = ("Variable '%s' is not a function"):format(proc_id_node:get_some().info.id_decl.name),
+      err = ("Variable '%s' is not a function"):format(proc_id_option:get_some().name),
       kind = ErrLocKind.SYNTAX,
       s_pos = {
         line = token.s_pos.line,
@@ -1287,24 +1327,27 @@ function Parser:parse_proc_call(scope: *Node): ParseResult
     })
   end
 
-  if proc_id_node:is_some() then
-    proc_id_node:get_some().info.id_decl.used = true
+  local proc_call_type: string
+  local proc_id: *Node
+  if proc_id_option:is_some() then
+    proc_id = proc_id_option:get_some()
+    proc_id.used = true
+    proc_call_type = proc_id.val.ret_t
   end
 
   local proc_call = new(Node)
   $proc_call = {
+    kind = NodeKind.PROC_CALL,
+
     s_pos = {
       line = token.s_pos.line,
       col = token.s_pos.col,
     },
-    info = {
-      proc_call = {
-        name = token.value
-      }
-    },
     s_index = token.s_index,
-    kind = NodeKind.PROC_CALL,
     scope = scope,
+
+    name = token.value,
+    type = proc_call_type,
   }
 
   expect_res = self:expect(TokenKind.OPEN_PAREN)
@@ -1317,7 +1360,7 @@ function Parser:parse_proc_call(scope: *Node): ParseResult
     if parse_res:is_err() then
       return parse_res
     end
-    proc_call.info.proc_call.args:push(parse_res:get_ok())
+    proc_call.args:push(parse_res:get_ok())
 
     expect_res = self:advance_comma_unless(TokenKind.CLOSE_PAREN)
     if expect_res:is_err() then
@@ -1329,12 +1372,55 @@ function Parser:parse_proc_call(scope: *Node): ParseResult
   if expect_res:is_err() then
     return ParseResult.err(expect_res:get_err())
   end
+  token = expect_res:get_ok()
 
   proc_call.e_index = token.e_index
   proc_call.e_pos = {
     line = token.e_pos.line,
     col = token.e_pos.col,
   }
+
+  if proc_id then
+    if #proc_call.args ~= #proc_id.val.params then
+      return ParseResult.err({
+        path = self.path,
+        content = self.content,
+        s_index = proc_call.s_index,
+        e_index = proc_call.e_index,
+        err = ("Procedure '%s' expects %d arguements but is receiving %s"):format(proc_id.name, #proc_id.val.params, #proc_call.args),
+        kind = ErrLocKind.SYNTAX,
+        s_pos = {
+          line = proc_call.s_pos.line,
+          col = proc_call.s_pos.col,
+        },
+        e_pos = {
+          line = proc_call.e_pos.line,
+          col = proc_call.e_pos.col,
+        },
+      })
+    end
+    for i, arg in ipairs(proc_call.args) do
+      if arg.type ~= proc_id.val.params[i].type then
+        return ParseResult.err({
+          path = self.path,
+          content = self.content,
+          s_index = arg.s_index,
+          e_index = arg.e_index,
+          err = ("Arg %d in procedure call '%s', with type '%s', does not match defined type '%s'"):format(i, proc_id.name, arg.type, proc_id.val.params[i].type),
+          kind = ErrLocKind.SYNTAX,
+          s_pos = {
+            line = arg.s_pos.line,
+            col = arg.s_pos.col,
+          },
+          e_pos = {
+            line = arg.e_pos.line,
+            col = arg.e_pos.col,
+          },
+        })
+      end
+    end
+  end
+
   return ParseResult.ok(proc_call)
 end
 
@@ -1391,12 +1477,8 @@ function Parser:parse_while_loop(scope: *Node): ParseResult
     line = token.e_pos.line,
     col = token.e_pos.col,
   }
-  while_loop.info = {
-    while_loop = {
-      content = self.content:sub(while_loop.s_index, while_loop.e_index),
-      cond = cond,
-    }
-  }
+  while_loop.content = self.content:sub(while_loop.s_index, while_loop.e_index)
+  while_loop.cond = cond
 
   return ParseResult.ok(while_loop)
 end
@@ -1431,7 +1513,10 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
       }
       in ParseResult.ok(node)
     end),
-    [TokenKind.KEYWORD_LET] = self:parse_id_decl(scope),
+    [TokenKind.KEYWORD_LET] = (do
+      self:advance()
+      in self:parse_id_decl(scope)
+    end),
     [TokenKind.IDENTIFIER] = (do
       local res: ParseResult = _switch!(self:peek_next().kind, {
         [TokenKind.OPEN_PAREN] = self:parse_proc_call(scope),
@@ -1463,6 +1548,39 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
       }
       in ParseResult.ok(node)
     end),
+    [TokenKind.KEYWORD_RETURN] = (do
+      self:advance()
+      local node: *Node = new(Node)
+      local _node: Node = $node
+      _node = {
+        s_pos = {
+          line = token.s_pos.line,
+          col = token.s_pos.col,
+        },
+        s_index = token.s_index,
+        kind = NodeKind.RETURN,
+        scope = scope,
+      }
+
+      local ret_value: *Node
+      if self:peek().kind ~= TokenKind.CLOSE_CURLY then
+        local parse_res = self:parse_expr(scope)
+        if parse_res:is_err() then
+          in parse_res
+        end
+
+        ret_value = parse_res:get_ok()
+      end
+
+      _node.e_pos = {
+        line = ret_value.e_pos.line,
+        col = ret_value.e_pos.col,
+      }
+      _node.val = ret_value
+      _node.e_index = ret_value.e_index
+      $node = _node
+      in ParseResult.ok(node)
+    end),
     _default = (do
       error(("Unexpected Token: %s('%s')"):format(TokenKind_tostring(token.kind), token.value))
       in ParseResult.err({})
@@ -1483,6 +1601,8 @@ function Parser:parse(): ParseResult
   local s_line, s_col = pos_to_line_col(1, self.content)
   local e_line, e_col = pos_to_line_col(#self.content, self.content)
   $ast = {
+    kind = NodeKind.AST,
+
     s_pos = {
       line = s_line,
       col = s_col
@@ -1494,12 +1614,8 @@ function Parser:parse(): ParseResult
     s_index = 1,
     e_index = #self.content,
     scope = nilptr,
-    kind = NodeKind.AST,
-    info = {
-      scope = {
-        content = self.content
-      }
-    }
+
+    content = self.content,
   }
   local res = self:parse_scope(ast, TokenKind.EOF)
   if res:is_err() then
@@ -1513,6 +1629,7 @@ end
 local cgen = @record{}
 
 local cgen.scope: function(scope: *Node, sb_head: *stringbuilder): string
+local cgen.expr: function(scope: *Node, node: *Node, sb_head: *stringbuilder): string
 
 local print_funcs: sequence(string)
 local anon_func_count = 0
@@ -1525,81 +1642,84 @@ function cgen.binary_op(node: *Node): string
   assert(node and node.kind == NodeKind.BINARY_OP)
   local sb: stringbuilder
 
-  local lhs = node.info.binary_op.lhs
-  local op = node.info.binary_op.op
-  local rhs = node.info.binary_op.rhs
-
-
-  local lhs_value: string = _switch!(lhs.kind, {
+  local lhs_value: string = _switch!(node.lhs.kind, {
     [NodeKind.ID] = (do
-      in lhs.info.id.name
+      in node.lhs.name
     end),
     _default = (do
-      error(("Unhandled lhs kind '%s'"):format(NodeKind_tostring(lhs.kind)))
+      error(("Unhandled lhs kind '%s'"):format(NodeKind_tostring(node.lhs.kind)))
       in ""
     end)
   })
-  local rhs_value: string = _switch!(rhs.kind, {
+  local rhs_value: string = _switch!(node.rhs.kind, {
     [NodeKind.ID] = (do
-      in rhs.info.id.name
+      in node.rhs.name
     end),
     _default = (do
-      error(("Unhandled lhs kind '%s'"):format(NodeKind_tostring(rhs.kind)))
+      error(("Unhandled lhs kind '%s'"):format(NodeKind_tostring(node.rhs.kind)))
       in ""
     end)
   })
 
-  sb:write(lhs_value, " ", op, " ", rhs_value)
+  sb:write(lhs_value, " ", node.op, " ", rhs_value)
   return sb:promote()
 end
 
-function cgen.proc_def(node: *Node, sb_head: *stringbuilder): string
-  assert(node and node.kind == NodeKind.ID_DECL)
+function cgen.type(t: string): string
+  assert(t ~= "")
+
+  local str: string = _switch!(t, {
+    ["string"] = (do
+      in "String"
+    end),
+    ["i64"] = (do
+      in "int64_t"
+    end),
+    _default = (do
+      error(("Unhandled type '%s'"):format(t))
+      in ""
+    end),
+  })
+  return str
+end
+
+function cgen.proc_def(node: *Node, sb_head: *stringbuilder)
   assert(sb_head)
 
-  local proc_value = node.info.id_decl.value
-  assert(proc_value.type == "proc_def")
+  assert(node.kind == NodeKind.PROC_DEF)
+  assert(node.type == "proc_def")
 
   anon_func_count = anon_func_count + 1
 
-  sb_head:write("typedef ", proc_value.info.proc_def.return_type, " (*anon_func_", anon_func_count, "_type)();\n\n")
-  sb_head:write(
-    proc_value.info.proc_def.return_type,
-    " anon_func_",
-    anon_func_count,
-    "(){\n",
-    cgen.scope(proc_value, sb_head),
-    "};\n\n"
-  )
+  for _, param in ipairs(node.params) do
+    for i, child in ipairs(node.children) do
+      if param == child then
+        node.children:remove(i)
+        break
+      end
+    end
+  end
 
-  local sb: stringbuilder
-  sb:write("anon_func_", anon_func_count, "_type ", node.info.id_decl.name, " = anon_func_", anon_func_count, ";\n")
-  return sb:promote()
-end
+  local ret_t = cgen.type(node.ret_t)
 
-function cgen.proc_call(node: *Node): string
-  assert(node and node.kind == NodeKind.PROC_CALL)
-  local sb: stringbuilder
-  sb:write(node.info.proc_call.name, "()")
-  return sb:promote()
-end
+  sb_head:write("typedef ", ret_t, " (*anon_func_", anon_func_count, "_type)(")
+  if #node.params > 0 then
+    for _, param in ipairs(node.params) do
+      sb_head:write(cgen.type(param.type), " ", param.name, ", ")
+    end
+    sb_head:rollback(2)
+  end
+  sb_head:write(");\n\n")
+  sb_head:write(ret_t, " anon_func_", anon_func_count, "(")
+  if #node.params > 0 then
+    for _, param in ipairs(node.params) do
+      sb_head:write(cgen.type(param.type), " ", param.name, ", ")
+    end
+    sb_head:rollback(2)
+  end
+  sb_head:write(") {\n") -- cgen.scope runs before the write of "{\n" so it was seperated
+  sb_head:write(cgen.scope(node, sb_head), "};\n\n")
 
-function cgen.while_loop(node: *Node, sb_head: *stringbuilder): string
-  assert(node and node.kind == NodeKind.WHILE_LOOP)
-  assert(sb_head)
-
-  local cond = node.info.while_loop.cond
-  local cond_val: string = _switch!(cond.kind, {
-    [NodeKind.LITERAL] = cond.info.literal.value,
-    _default = (do
-      error(("Unexpected cond kind '%s'"):format(NodeKind_tostring(cond.kind)))
-      in ""
-    end)
-  })
-
-  local sb: stringbuilder
-  sb:write("while (", cond_val, ") {\n", cgen.scope(node, sb_head), "\n}")
-  return sb:promote()
 end
 
 function cgen.print(node: *Node, sb_head: *stringbuilder): string
@@ -1611,8 +1731,7 @@ function cgen.print(node: *Node, sb_head: *stringbuilder): string
 
   local print_args_sb: stringbuilder
 
-  local args = node.info.proc_call.args
-  for i, arg in ipairs(args) do
+  for i, arg in ipairs(node.args) do
     local _: niltype = _switch!(arg.type, {
       ["string"] = (do
         sb:write("String ")
@@ -1640,11 +1759,11 @@ function cgen.print(node: *Node, sb_head: *stringbuilder): string
 
   if print_funcs_i == 0 then
     print_funcs:push(print_args_sb:promote())
-    if # args > 0 then
+    if # node.args > 0 then
       sb:rollback(2)
     end
     sb:write(") {\n")
-    for i, arg in ipairs(args) do
+    for i, arg in ipairs(node.args) do
       local _: niltype _switch!(arg.type, {
         ["string"] = (do
           sb:write(
@@ -1678,7 +1797,7 @@ function cgen.print(node: *Node, sb_head: *stringbuilder): string
       sb:write("fflush(stdout);\n")
       sb:write('fputs("\\t", stdout);\n')
     end
-    if #args > 0 then
+    if #node.args > 0 then
       sb:rollback(1)
     end
     sb:write('fputs("\\n", stdout);\n')
@@ -1687,15 +1806,15 @@ function cgen.print(node: *Node, sb_head: *stringbuilder): string
   end
   local print_sb: stringbuilder
   print_sb:write("my_lang_print_", print_funcs_i > 0 and print_funcs_i or #print_funcs, "(")
-  if #args > 0 then
-    for _, arg in ipairs(args) do
+  if #node.args > 0 then
+    for _, arg in ipairs(node.args) do
       local _: niltype = _switch!(arg.kind, {
         [NodeKind.ID] = (do
-          print_sb:write(arg.info.id.name)
+          print_sb:write(arg.name)
           in nil
         end),
         [NodeKind.LITERAL] = (do
-          local val: string = arg.info.literal.value
+          local val: string = arg.lit_val
           local _: niltype = _switch!(arg.type, {
             ["string"] = (do
               print_sb:write("(String)" .. cgen.string(val))
@@ -1730,45 +1849,108 @@ function cgen.print(node: *Node, sb_head: *stringbuilder): string
   return print_sb:promote()
 end
 
-function cgen.id_decl(node: *Node, sb_head: *stringbuilder): string
+function cgen.proc_call(scope: *Node, sb_head: *stringbuilder, node: *Node): string
+  assert(scope and scope:is_scope())
+  assert(sb_head)
+  assert(node and node.kind == NodeKind.PROC_CALL)
+
+  local sb: stringbuilder
+  sb:write(node.name, "(")
+  if #node.args > 0 then
+    for _, arg in ipairs(node.args) do
+      sb:write(cgen.expr(scope, arg, sb_head), ", ")
+    end
+    sb:rollback(2)
+  end
+  sb:write(")")
+  return sb:promote()
+end
+
+cgen.expr = function(scope: *Node, node: *Node, sb_head: *stringbuilder): string
+  assert(scope and scope:is_scope())
+  assert(sb_head)
+
+  local str: string = _switch!(node.kind, {
+    [NodeKind.PROC_CALL] = (do
+      local proc_call_sb: stringbuilder
+      local id: Option(*Node) = Parser.find_id_up_scope(scope, node.name, node.s_index)
+      if not (id:is_some() and id:get_some().name == "print") and node.name == "print" then
+        proc_call_sb:write(cgen.print(node, sb_head))
+      else
+        proc_call_sb:write(cgen.proc_call(scope, sb_head, node))
+      end
+      in proc_call_sb:promote()
+    end),
+    [NodeKind.LITERAL] = (do
+      if node.type == "string" then
+        in "(String)" .. cgen.string(node.lit_val)
+      elseif node.type == "i64" then
+        in node.lit_val
+      else
+        error(("Unhandle literal node type '%s'"):format(node.type))
+      end
+      in ""
+    end),
+    [NodeKind.BINARY_OP] = cgen.binary_op(node),
+    [NodeKind.PROC_DEF] = (do
+      cgen.proc_def(node, sb_head)
+      in ""
+    end),
+    _default = (do
+      error(("Unexpected expr node kind: '%s'"):format(NodeKind_tostring(node.kind)))
+      in ""
+    end),
+  })
+
+  return str
+end
+
+function cgen.while_loop(node: *Node, sb_head: *stringbuilder): string
+  assert(node and node.kind == NodeKind.WHILE_LOOP)
+  assert(sb_head)
+
+  local cond = node.cond
+  local cond_val: string = _switch!(cond.kind, {
+    [NodeKind.LITERAL] = cond.lit_val,
+    _default = (do
+      error(("Unexpected cond kind '%s'"):format(NodeKind_tostring(cond.kind)))
+      in ""
+    end)
+  })
+
+  local sb: stringbuilder
+  sb:write("while (", cond_val, ") {\n", cgen.scope(node, sb_head), "\n}")
+  return sb:promote()
+end
+
+function cgen.id_decl(scope: *Node, node: *Node, sb_head: *stringbuilder): string
+  assert(scope and scope:is_scope())
   assert(node and node.kind == NodeKind.ID_DECL)
   assert(sb_head)
 
   local sb: stringbuilder
 
-  local value = node.info.id_decl.value
-  local final_value: string = _switch!(value.kind, {
-    [NodeKind.LITERAL] = (do
-      if value.type == "string" then
-        in cgen.string(value.info.literal.value)
-      elseif value.type == "i64" then
-        in value.info.literal.value
-      else
-        error(("Unhandle literal value type '%s'"):format(value.type))
-        in ""
-      end
-    end),
-    [NodeKind.BINARY_OP] = cgen.binary_op(value),
-    [NodeKind.PROC_DEF] = cgen.proc_def(node, sb_head),
-    _default = (do
-      error(("Unexpected node value kind '%s'"):format(NodeKind_tostring(value.kind)))
-      in ""
-    end),
-  })
+  local final_value: string
+  if node.val then
+    final_value = cgen.expr(scope, node.val, sb_head)
+  else
+    final_value = "{0}"
+  end
   local _: niltype = _switch!(node.type, {
     ["string"] = (do
-      sb:write("String ", node.info.id_decl.name, " = ", final_value, ";\n")
+      sb:write("String ", node.name, " = ", final_value, ";\n")
       in nil
     end),
     ["i64"] = (do
-      sb:write("int64_t ", node.info.id_decl.name, " = ", final_value, ";\n")
+      sb:write("int64_t ", node.name, " = ", final_value, ";\n")
       in nil
     end),
     ["proc_def"] = (do
-      sb:write(final_value)
+      sb:write("anon_func_", anon_func_count, "_type ", node.name, " = anon_func_", anon_func_count, ";\n")
       in nil
     end),
     _default = (do
+      print(NodeKind_tostring(node.kind))
       error(("Unhandled node type '%s'"):format(node.type))
       in nil
     end),
@@ -1785,28 +1967,27 @@ cgen.scope = function(scope: *Node, sb_head: *stringbuilder): string
   for i, child in ipairs(scope.children) do
     local child_str: string = _switch!(child.kind, {
       [NodeKind.COMMENT] = "",
-      [NodeKind.PROC_CALL] = (do
-        local proc_call_sb: stringbuilder
-        local id: Option(*Node) = Parser.find_id_up_scope(scope, child.info.proc_call.name, child.s_index)
-        if not (id:is_some() and id:get_some().info.id.name == "print") and child.info.proc_call.name == "print" then
-          proc_call_sb:write(cgen.print(child, sb_head), ";\n")
-        else
-          proc_call_sb:write(cgen.proc_call(child), ";\n")
-        end
-        in proc_call_sb:promote()
-      end),
+      [NodeKind.PROC_CALL] = cgen.expr(scope, child, sb_head) .. ";\n",
       [NodeKind.WHILE_LOOP] = cgen.while_loop(child, sb_head),
       [NodeKind.BREAK] = "break;\n",
       [NodeKind.ID_DECL] = (do
-        local id_decl: string = cgen.id_decl(child, sb_head)
-        if scope.kind == NodeKind.AST then
+        local id_decl: string = cgen.id_decl(scope, child, sb_head)
+        if scope.kind == NodeKind.AST and child.val.kind ~= NodeKind.PROC_CALL then
           sb_head:write(id_decl)
           in ""
         end
         in id_decl
       end),
+      [NodeKind.RETURN] = (do
+        local ret_sb: stringbuilder
+        ret_sb:write("return ")
+        if child.val then
+          ret_sb:write(cgen.expr(scope, child.val, sb_head))
+        end
+        ret_sb:write(";\n")
+        in ret_sb:promote()
+      end),
       _default = (do
-        print(child.kind)
         error(("Unexpected child node kind: '%s'"):format(NodeKind_tostring(child.kind)))
         in ""
       end),
@@ -1829,7 +2010,7 @@ function cgen.final(scope: *Node): string
 
 typedef struct {
   char* data;
-  unsigned int size;
+  size_t size;
 } String;
 
 ]])
@@ -1863,10 +2044,10 @@ local function build_run_c_code(c_code: string, path: string): integer
 
   local build_cmd = "cc " .. GEN_C_PATH .. " -o " .. file_name .. " -Wextra -Wall && " .. file_name
   local ok, _, code = os.execute(build_cmd)
-  defer
-    os.remove(GEN_C_PATH)
-    os.remove(file_name)
-  end
+  -- defer
+  --   os.remove(GEN_C_PATH)
+  --   os.remove(file_name)
+  -- end
   if not ok then
     return code
   end
