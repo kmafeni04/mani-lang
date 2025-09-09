@@ -1,5 +1,3 @@
--- FIX: print function definitions that happen inside of regular functions should all happen outside
-
 require "stringbuilder"
 require "os"
 require "arg"
@@ -27,7 +25,7 @@ local Pos = @record{
 
 local ErrLocKind = @enum{
   _UNDEFINED = 0,
-  ERROR,
+  SEMANTIC,
   SYNTAX,
   _COUNT
 }
@@ -992,7 +990,7 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
         s_index = ret_stmt_val.s_index,
         e_index = ret_stmt_val.e_index,
         err = ("Return statement type '%s' does not match previously defined return type '%s'"):format(ret_stmt_val.type, ret_t),
-        kind = ErrLocKind.ERROR,
+        kind = ErrLocKind.SEMANTIC,
         s_pos = {
           line = ret_stmt_val.s_pos.line,
           col = ret_stmt_val.s_pos.col,
@@ -1015,7 +1013,7 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
       s_index = token.s_index,
       e_index = token.e_index,
       err = ("Expected Token '%s' but got '%s'"):format(TokenKind_tostring(TokenKind.CLOSE_CURLY), TokenKind_tostring(token.kind)),
-      kind = ErrLocKind.ERROR,
+      kind = ErrLocKind.SEMANTIC,
       s_pos = {
         line = token.s_pos.line,
         col = token.s_pos.col,
@@ -1075,7 +1073,7 @@ function Parser:parse_expr(scope: *Node, lhs: *Node): ParseResult
           s_index = token.s_index,
           e_index = token.e_index,
           err = ("Undeclared identifier '%s'"):format(token.value),
-          kind = ErrLocKind.ERROR,
+          kind = ErrLocKind.SEMANTIC,
           s_pos = {
             line = token.s_pos.line,
             col = token.s_pos.col,
@@ -1244,7 +1242,7 @@ Parser.parse_id_decl = function(self:*Parser, scope: *Node): ParseResult
         s_index = id_decl.s_index,
         e_index = node.e_index,
         err = ("Defined declaration type '%s' does not match value type '%s'"):format(decl_type, node.type),
-        kind = ErrLocKind.ERROR,
+        kind = ErrLocKind.SEMANTIC,
         s_pos = {
           line = id_decl.s_pos.line,
           col = id_decl.s_pos.col,
@@ -1690,6 +1688,7 @@ function cgen.proc_def(node: *Node, sb_head: *stringbuilder)
   assert(node.type == "proc_def")
 
   anon_func_count = anon_func_count + 1
+  local sb: stringbuilder
 
   for _, param in ipairs(node.params) do
     for i, child in ipairs(node.children) do
@@ -1702,23 +1701,25 @@ function cgen.proc_def(node: *Node, sb_head: *stringbuilder)
 
   local ret_t = cgen.type(node.ret_t)
 
-  sb_head:write("typedef ", ret_t, " (*anon_func_", anon_func_count, "_type)(")
+  sb:write("typedef ", ret_t, " (*anon_func_", anon_func_count, "_type)(")
   if #node.params > 0 then
     for _, param in ipairs(node.params) do
-      sb_head:write(cgen.type(param.type), " ", param.name, ", ")
+      sb:write(cgen.type(param.type), " ", param.name, ", ")
     end
-    sb_head:rollback(2)
+    sb:rollback(2)
   end
-  sb_head:write(");\n\n")
-  sb_head:write(ret_t, " anon_func_", anon_func_count, "(")
+  sb:write(");\n\n")
+  sb:write(ret_t, " anon_func_", anon_func_count, "(")
   if #node.params > 0 then
     for _, param in ipairs(node.params) do
-      sb_head:write(cgen.type(param.type), " ", param.name, ", ")
+      sb:write(cgen.type(param.type), " ", param.name, ", ")
     end
-    sb_head:rollback(2)
+    sb:rollback(2)
   end
-  sb_head:write(") {\n") -- cgen.scope runs before the write of "{\n" so it was seperated
-  sb_head:write(cgen.scope(node, sb_head), "};\n\n")
+  sb:write(") {\n") -- cgen.scope runs before the write of "{\n" so it was seperated
+  sb:write(cgen.scope(node, sb_head), "};\n\n")
+
+  sb_head:write(sb:promote())
 
 end
 
@@ -2042,16 +2043,13 @@ local function build_run_c_code(c_code: string, path: string): integer
   file:write(c_code)
   file:close()
 
-  local build_cmd = "cc " .. GEN_C_PATH .. " -o " .. file_name .. " -Wextra -Wall && " .. file_name
-  local ok, _, code = os.execute(build_cmd)
-  -- defer
-  --   os.remove(GEN_C_PATH)
-  --   os.remove(file_name)
-  -- end
-  if not ok then
-    return code
+  local build_cmd = "tcc " .. GEN_C_PATH .. " -o " .. file_name .. " -Wextra -Wall && " .. file_name
+  local _, _, code = os.execute(build_cmd)
+  defer
+    os.remove(GEN_C_PATH)
+    os.remove(file_name)
   end
-  return 0
+  return code
 end
 
 -- RUN SECTION --
