@@ -1405,7 +1405,7 @@ Parser.parse_proc_call = function(self: *Parser, scope: *Node): ParseResult
           s_index = arg.s_index,
           e_index = arg.e_index,
           err = ("Arg %d in procedure call '%s', with type '%s', does not match defined type '%s'"):format(i, proc_id.name, arg.type, proc_id.val.params[i].type),
-          kind = ErrLocKind.SYNTAX,
+          kind = ErrLocKind.SEMANTIC,
           s_pos = {
             line = arg.s_pos.line,
             col = arg.s_pos.col,
@@ -1481,6 +1481,86 @@ function Parser:parse_while_loop(scope: *Node): ParseResult
   return ParseResult.ok(while_loop)
 end
 
+function Parser:parse_assignment(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local token = self:advance()
+
+  local id_opt: Option(*Node) = Parser.find_id_up_scope(scope, token.value, token.s_index)
+  if id_opt:is_none() then
+    return ParseResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = token.s_index,
+      e_index = token.e_index,
+      err = ("Undeclared identifier '%s'"):format(token.value),
+      kind = ErrLocKind.SEMANTIC,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
+
+  local id_node = id_opt:get_some()
+
+  local expect_res = self:expect(TokenKind.EQUALS)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  local parse_res = self:parse_expr(scope)
+  if parse_res:is_err() then
+    return parse_res
+  end
+  local val = parse_res:get_ok()
+
+  if val.type ~= id_node.type then
+    return ParseResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = token.s_index,
+      e_index = val.e_index,
+      err = ("type '%s' does not match variable '%s' type '%s' in assignment"):format(val.type, id_node.name, id_node.type),
+      kind = ErrLocKind.SEMANTIC,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = val.e_pos.line,
+        col = val.e_pos.col,
+      },
+    })
+  end
+
+  local node: *Node = new(Node)
+  $node = {
+    kind = NodeKind.ASSIGNMENT,
+
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    e_pos = {
+      line = val.e_pos.line,
+      col = val.e_pos.col,
+    },
+    scope = scope,
+
+    s_index = token.s_index,
+    e_index = val.e_index,
+
+    name = id_node.name,
+    val = val
+  }
+  return ParseResult.ok(node)
+end
+
 Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): ParseResult
   assert(scope and scope:is_scope())
   assert(till > 0)
@@ -1518,6 +1598,7 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
     [TokenKind.IDENTIFIER] = (do
       local res: ParseResult = _switch!(self:peek_next().kind, {
         [TokenKind.OPEN_PAREN] = self:parse_proc_call(scope),
+        [TokenKind.EQUALS] = self:parse_assignment(scope),
         _default = (do
           error(("Unexpected Token: %s('%s')"):format(TokenKind_tostring(token.kind), token.value))
           in ParseResult.err({})
@@ -1987,6 +2068,11 @@ cgen.scope = function(scope: *Node, sb_head: *stringbuilder): string
         end
         ret_sb:write(";\n")
         in ret_sb:promote()
+      end),
+      [NodeKind.ASSIGNMENT] = (do
+        local assign_sb: stringbuilder
+        assign_sb:write(child.name, " = ", cgen.expr(scope, child.val, sb_head), ";\n")
+        in assign_sb:promote()
       end),
       _default = (do
         error(("Unexpected child node kind: '%s'"):format(NodeKind_tostring(child.kind)))

@@ -1,11 +1,4 @@
 let x := 10
-let a := proc(a1: string, a2: i64) {
-  while true {
-    print(a1, a2 + x)
-    break
-  }
-  return "Hello world"
-}
-
-let y := a("hello", 10)
-print(y)
+print(x)
+x = 20
+print(x)
