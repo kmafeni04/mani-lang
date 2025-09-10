@@ -1,6 +1,7 @@
-let x: i64 = 10
+let x := 10
 
-while x < 10 {
-  print(x)
-  x = x + 1
+proc main(): void {
+  print("hello world")
 }
+
+main()

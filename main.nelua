@@ -742,6 +742,7 @@ local NodeKind = @enum{
   AST,
   ASSIGNMENT,
   SCOPE,
+  ANON_PROC_DEF,
   PROC_DEF,
   PROC_CALL,
   ID_DECL,
@@ -816,7 +817,8 @@ function Node:is_scope(): boolean
       NodeKind.AST,
       NodeKind.SCOPE,
       NodeKind.WHILE_LOOP,
-      NodeKind.PROC_DEF
+      NodeKind.PROC_DEF,
+      NodeKind.ANON_PROC_DEF
     then
       return true
     else
@@ -918,7 +920,7 @@ function Parser.find_id_up_scope(scope: *Node, name: string, s_index: integer): 
   assert(scope and scope:is_scope())
 
   for _, node in ipairs(scope.children) do
-    if node.kind == NodeKind.ID_DECL and node.name == name and node.s_index <= s_index then
+    if (node.kind == NodeKind.ID_DECL or node.kind == NodeKind.PROC_DEF) and node.name == name and node.s_index <= s_index then
       return Option.Some(node)
     end
   end
@@ -927,6 +929,149 @@ function Parser.find_id_up_scope(scope: *Node, name: string, s_index: integer): 
     return Parser.find_id_up_scope(scope.scope, name, s_index)
   end
   return Option.None()
+end
+
+local function get_returns(scope: *Node, rets: sequence(*Node))
+  assert(scope and scope:is_scope())
+  for _, child in ipairs(scope.children) do
+    if child.kind == NodeKind.RETURN then
+      rets:push(child)
+    end
+
+    if child:is_scope() then
+      get_returns(child, rets)
+    end
+  end
+end
+
+function Parser:parse_anon_proc_def(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.KEYWORD_PROC)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local token = expect_res:get_ok()
+
+  local anon_proc_def = new(Node)
+
+  $anon_proc_def = {
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    s_index = token.s_index,
+    e_index = 0,
+    kind = NodeKind.ANON_PROC_DEF,
+    scope = scope,
+  }
+
+  expect_res  = self:expect(TokenKind.OPEN_PAREN)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  while self:peek().kind ~= TokenKind.CLOSE_PAREN do
+    local parse_res: ParseResult = self:parse_id_decl(scope)
+    if parse_res:is_err() then
+      return parse_res
+    end
+
+    local param = parse_res:get_ok()
+    anon_proc_def.params:push(param)
+    anon_proc_def.children:push(param)
+
+    expect_res = self:advance_comma_unless(TokenKind.CLOSE_PAREN)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
+  end
+
+  expect_res = self:expect(TokenKind.CLOSE_PAREN)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  expect_res = self:expect(TokenKind.COLON)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  expect_res = self:expect(TokenKind.IDENTIFIER)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  token = expect_res:get_ok()
+  anon_proc_def.ret_t = token.value
+
+  expect_res = self:expect(TokenKind.OPEN_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  while self:peek().kind ~= TokenKind.EOF do
+    local parse_res = self:parse_scope(anon_proc_def, TokenKind.CLOSE_CURLY)
+    if parse_res:is_err() then
+      return parse_res
+    else
+      break
+    end
+  end
+
+  local rets: sequence(*Node)
+  get_returns(anon_proc_def, &rets)
+  for _, ret in ipairs(rets) do
+    local ret_stmt_val = ret.val
+    if ret_stmt_val.type ~= anon_proc_def.ret_t then
+      return ParseResult.err({
+        path = self.path,
+        content = self.content,
+        s_index = ret_stmt_val.s_index,
+        e_index = ret_stmt_val.e_index,
+        err = ("Return statement type '%s' does not match previously defined return type '%s'"):format(ret_stmt_val.type, anon_proc_def.ret_t),
+        kind = ErrLocKind.SEMANTIC,
+        s_pos = {
+          line = ret_stmt_val.s_pos.line,
+          col = ret_stmt_val.s_pos.col,
+        },
+        e_pos = {
+          line = ret_stmt_val.e_pos.line,
+          col = ret_stmt_val.e_pos.col,
+        },
+      })
+    end
+  end
+
+  local token = self:peek()
+  if token.kind ~= TokenKind.CLOSE_CURLY then
+    return ParseResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = token.s_index,
+      e_index = token.e_index,
+      err = ("Expected Token '%s' but got '%s'"):format(TokenKind_tostring(TokenKind.CLOSE_CURLY), TokenKind_tostring(token.kind)),
+      kind = ErrLocKind.SEMANTIC,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
+  self:advance()
+
+  anon_proc_def.e_index = token.e_index
+  anon_proc_def.e_pos = {
+    line = token.e_pos.line,
+    col = token.e_pos.col,
+  }
+  anon_proc_def.content = self.content:sub(anon_proc_def.s_index, anon_proc_def.e_index)
+  anon_proc_def.type = "anon_proc_def"
+
+  return ParseResult.ok(anon_proc_def)
 end
 
 function Parser:parse_proc_def(scope: *Node): ParseResult
@@ -938,20 +1083,28 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
   end
   local token = expect_res:get_ok()
 
+  local expect_res = self:expect(TokenKind.IDENTIFIER)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local proc_def_name = expect_res:get_ok().value
+
   local proc_def = new(Node)
 
   $proc_def = {
+    kind = NodeKind.PROC_DEF,
     s_pos = {
       line = token.s_pos.line,
       col = token.s_pos.col,
     },
     s_index = token.s_index,
-    e_index = 0,
-    kind = NodeKind.PROC_DEF,
     scope = scope,
+
+    name = proc_def_name,
+    type = "proc_def"
   }
 
-  expect_res  = self:expect(TokenKind.OPEN_PAREN)
+  expect_res = self:expect(TokenKind.OPEN_PAREN)
   if expect_res:is_err() then
     return ParseResult.err(expect_res:get_err())
   end
@@ -977,22 +1130,41 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
     return ParseResult.err(expect_res:get_err())
   end
 
-  local ret_t: string
-  if self:peek().kind == TokenKind.COLON then
-    token = self:advance()
-    expect_res = self:expect(TokenKind.IDENTIFIER)
-    if expect_res:is_err() then
-      return ParseResult.err(expect_res:get_err())
-    end
-    token = expect_res:get_ok()
-    ret_t = token.value
+  expect_res = self:expect(TokenKind.COLON)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
   end
+
+  expect_res = self:expect(TokenKind.IDENTIFIER)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  token = expect_res:get_ok()
+  proc_def.ret_t = token.value
 
   expect_res = self:expect(TokenKind.OPEN_CURLY)
   if expect_res:is_err() then
     return ParseResult.err(expect_res:get_err())
   end
 
+  local proc_id_decl = new(Node)
+
+  $proc_id_decl = {
+    s_pos = {
+      line = proc_def.s_pos.line,
+      col = proc_def.s_pos.col,
+    },
+    e_pos = {},
+    s_index = proc_def.s_index,
+    kind = NodeKind.ID_DECL,
+    scope = scope,
+  }
+
+  proc_id_decl.name = proc_def.name
+  proc_id_decl.val = proc_def
+  proc_id_decl.type = proc_def.type
+
+  proc_def.children:push(proc_id_decl)
   while self:peek().kind ~= TokenKind.EOF do
     local parse_res = self:parse_scope(proc_def, TokenKind.CLOSE_CURLY)
     if parse_res:is_err() then
@@ -1002,30 +1174,17 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
     end
   end
 
-  local function get_returns(scope: *Node, rets:*sequence(*Node))
-    assert(scope and scope:is_scope())
-    for _, child in ipairs(scope.children) do
-      if child.kind == NodeKind.RETURN then
-        rets:push(child)
-      end
-
-      if child:is_scope() then
-        get_returns(child, rets)
-      end
-    end
-  end
-
   local rets: sequence(*Node)
-  get_returns(proc_def, rets)
+  get_returns(proc_def, &rets)
   for _, ret in ipairs(rets) do
     local ret_stmt_val = ret.val
-    if ret_t ~= "" and ret_stmt_val.type ~= ret_t then
+    if ret_stmt_val.type ~= proc_def.ret_t then
       return ParseResult.err({
         path = self.path,
         content = self.content,
         s_index = ret_stmt_val.s_index,
         e_index = ret_stmt_val.e_index,
-        err = ("Return statement type '%s' does not match previously defined return type '%s'"):format(ret_stmt_val.type, ret_t),
+        err = ("Return statement type '%s' does not match defined return type '%s'"):format(ret_stmt_val.type, proc_def.ret_t),
         kind = ErrLocKind.SEMANTIC,
         s_pos = {
           line = ret_stmt_val.s_pos.line,
@@ -1036,8 +1195,6 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
           col = ret_stmt_val.e_pos.col,
         },
       })
-    else
-      ret_t = ret_stmt_val.type
     end
   end
 
@@ -1062,16 +1219,12 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
   end
   self:advance()
 
-  if ret_t == "" then ret_t = "void" end
-
   proc_def.e_index = token.e_index
   proc_def.e_pos = {
     line = token.e_pos.line,
     col = token.e_pos.col,
   }
   proc_def.content = self.content:sub(proc_def.s_index, proc_def.e_index)
-  proc_def.ret_t = ret_t
-  proc_def.type = "proc_def"
 
   return ParseResult.ok(proc_def)
 end
@@ -1219,7 +1372,7 @@ function Parser:parse_expr(scope: *Node, lhs: *Node): ParseResult
       end
       in ParseResult.ok(new_number_literal(op .. token.value, token, scope))
     end),
-    [TokenKind.KEYWORD_PROC] = self:parse_proc_def(scope),
+    [TokenKind.KEYWORD_PROC] = self:parse_anon_proc_def(scope),
     _default = (do
       error(("UNREACHABLE TokenKind '%s'"):format(TokenKind_tostring(token.kind)))
       in ParseResult.err({})
@@ -1252,6 +1405,26 @@ Parser.parse_id_decl = function(self:*Parser, scope: *Node): ParseResult
   local token = expect_res:get_ok()
 
   local decl_name = token.value
+
+  local id_opt = Parser.find_id_up_scope(scope, decl_name, token.s_index)
+  if id_opt:is_some() then
+    return ParseResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = token.s_index,
+      e_index = token.e_index,
+      err = ("Redeclaration of identifier '%s'"):format(token.value),
+      kind = ErrLocKind.SEMANTIC,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
 
   local id_decl = new(Node)
 
@@ -1348,7 +1521,7 @@ Parser.parse_proc_call = function(self: *Parser, scope: *Node): ParseResult
   local token = expect_res:get_ok()
 
   local proc_id_option = Parser.find_id_up_scope(scope, token.value, token.s_index)
-  if not proc_id_option and not builtin_procs:has(token.value) then
+  if proc_id_option:is_none() and not builtin_procs:has(token.value) then
     return ParseResult.err({
       path = self.path,
       content = self.content,
@@ -1367,7 +1540,7 @@ Parser.parse_proc_call = function(self: *Parser, scope: *Node): ParseResult
     })
   end
 
-  if proc_id_option:is_some() and proc_id_option:get_some().type ~= "proc_def" then
+  if proc_id_option:is_some() and (proc_id_option:get_some().type ~= "proc_def" and proc_id_option:get_some().type ~= "anon_proc_def") then
     return ParseResult.err({
       path = self.path,
       content = self.content,
@@ -1391,7 +1564,11 @@ Parser.parse_proc_call = function(self: *Parser, scope: *Node): ParseResult
   if proc_id_option:is_some() then
     proc_id = proc_id_option:get_some()
     proc_id.used = true
-    proc_call_type = proc_id.val.ret_t
+    if proc_id.kind == NodeKind.ANON_PROC_DEF then
+      proc_call_type = proc_id.val.ret_t
+    else
+      proc_call_type = proc_id.ret_t
+    end
   end
 
   local proc_call = new(Node)
@@ -1440,7 +1617,13 @@ Parser.parse_proc_call = function(self: *Parser, scope: *Node): ParseResult
   }
 
   if proc_id then
-    if #proc_call.args ~= #proc_id.val.params then
+    local params: sequence(*Node)
+    if proc_id.kind == NodeKind.ANON_PROC_DEF then
+      params = proc_id.val.params
+    else
+      params = proc_id.params
+    end
+    if #proc_call.args ~= #params then
       return ParseResult.err({
         path = self.path,
         content = self.content,
@@ -1721,6 +1904,7 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
       $node = _node
       in ParseResult.ok(node)
     end),
+    [TokenKind.KEYWORD_PROC] = self:parse_proc_def(scope),
     _default = (do
       error(("Unexpected Token: %s('%s')"):format(TokenKind_tostring(token.kind), token.value))
       in ParseResult.err({})
@@ -1768,8 +1952,8 @@ end
 
 local cgen = @record{}
 
-local cgen.scope: function(scope: *Node, sb_head: *stringbuilder): string
-local cgen.expr: function(scope: *Node, node: *Node, sb_head: *stringbuilder): string
+local cgen.scope: function(scope: *Node, sb_head: *stringbuilder, prefix: string): string
+local cgen.expr: function(scope: *Node, node: *Node, sb_head: *stringbuilder, prefix: string): string
 
 local print_funcs: sequence(string)
 local anon_func_count = 0
@@ -1813,6 +1997,9 @@ function cgen.type(t: string): string
     ["i64"] = (do
       in "int64_t"
     end),
+    ["void"] = (do
+      in "void"
+    end),
     _default = (do
       error(("Unhandled type '%s'"):format(t))
       in ""
@@ -1821,11 +2008,11 @@ function cgen.type(t: string): string
   return str
 end
 
-function cgen.proc_def(node: *Node, sb_head: *stringbuilder)
+function cgen.anon_proc_def(node: *Node, sb_head: *stringbuilder)
   assert(sb_head)
 
-  assert(node.kind == NodeKind.PROC_DEF)
-  assert(node.type == "proc_def")
+  assert(node.kind == NodeKind.ANON_PROC_DEF)
+  assert(node.type == "anon_proc_def")
 
   anon_func_count = anon_func_count + 1
   local sb: stringbuilder
@@ -1850,6 +2037,53 @@ function cgen.proc_def(node: *Node, sb_head: *stringbuilder)
   end
   sb:write(");\n\n")
   sb:write(ret_t, " anon_func_", anon_func_count, "(")
+  if #node.params > 0 then
+    for _, param in ipairs(node.params) do
+      sb:write(cgen.type(param.type), " ", param.name, ", ")
+    end
+    sb:rollback(2)
+  end
+  sb:write(") {\n") -- cgen.scope runs before the write of "{\n" so it was seperated
+  sb:write(cgen.scope(node, sb_head), "};\n\n")
+
+  sb_head:write(sb:promote())
+
+end
+
+function cgen.proc_def(node: *Node, sb_head: *stringbuilder, prefix: string)
+  assert(sb_head)
+
+  assert(node.kind == NodeKind.PROC_DEF)
+  assert(node.type == "proc_def")
+
+  if not node.used then
+    return
+  end
+
+  local sb: stringbuilder
+
+  for _, param in ipairs(node.params) do
+    for i, child in ipairs(node.children) do
+      if param == child then
+        node.children:remove(i)
+        break
+      end
+    end
+  end
+
+  local ret_t = cgen.type(node.ret_t)
+
+  local name = prefix .. "_" .. node.name
+
+  sb:write("typedef ", ret_t, " (*", name, "_type)(")
+  if #node.params > 0 then
+    for _, param in ipairs(node.params) do
+      sb:write(cgen.type(param.type), " ", param.name, ", ")
+    end
+    sb:rollback(2)
+  end
+  sb:write(");\n\n")
+  sb:write(ret_t, " ", name, "(")
   if #node.params > 0 then
     for _, param in ipairs(node.params) do
       sb:write(cgen.type(param.type), " ", param.name, ", ")
@@ -1990,16 +2224,16 @@ function cgen.print(node: *Node, sb_head: *stringbuilder): string
   return print_sb:promote()
 end
 
-function cgen.proc_call(scope: *Node, sb_head: *stringbuilder, node: *Node): string
+function cgen.proc_call(scope: *Node, sb_head: *stringbuilder, node: *Node, prefix: string): string
   assert(scope and scope:is_scope())
   assert(sb_head)
   assert(node and node.kind == NodeKind.PROC_CALL)
 
   local sb: stringbuilder
-  sb:write(node.name, "(")
+  sb:write(prefix, "_", node.name, "(")
   if #node.args > 0 then
     for _, arg in ipairs(node.args) do
-      sb:write(cgen.expr(scope, arg, sb_head), ", ")
+      sb:write(cgen.expr(scope, arg, sb_head, prefix), ", ")
     end
     sb:rollback(2)
   end
@@ -2007,7 +2241,7 @@ function cgen.proc_call(scope: *Node, sb_head: *stringbuilder, node: *Node): str
   return sb:promote()
 end
 
-cgen.expr = function(scope: *Node, node: *Node, sb_head: *stringbuilder): string
+cgen.expr = function(scope: *Node, node: *Node, sb_head: *stringbuilder, prefix: string): string
   assert(scope and scope:is_scope())
   assert(sb_head)
 
@@ -2018,7 +2252,7 @@ cgen.expr = function(scope: *Node, node: *Node, sb_head: *stringbuilder): string
       if not (id:is_some() and id:get_some().name == "print") and node.name == "print" then
         proc_call_sb:write(cgen.print(node, sb_head))
       else
-        proc_call_sb:write(cgen.proc_call(scope, sb_head, node))
+        proc_call_sb:write(cgen.proc_call(scope, sb_head, node, prefix))
       end
       in proc_call_sb:promote()
     end),
@@ -2033,10 +2267,11 @@ cgen.expr = function(scope: *Node, node: *Node, sb_head: *stringbuilder): string
       in ""
     end),
     [NodeKind.BINARY_OP] = cgen.binary_op(node),
-    [NodeKind.PROC_DEF] = (do
-      cgen.proc_def(node, sb_head)
+    [NodeKind.ANON_PROC_DEF] = (do
+      cgen.anon_proc_def(node, sb_head)
       in ""
     end),
+    [NodeKind.PROC_DEF] = "",
     _default = (do
       error(("Unexpected expr node kind: '%s'"):format(NodeKind_tostring(node.kind)))
       in ""
@@ -2046,45 +2281,50 @@ cgen.expr = function(scope: *Node, node: *Node, sb_head: *stringbuilder): string
   return str
 end
 
-function cgen.while_loop(node: *Node, sb_head: *stringbuilder): string
+function cgen.while_loop(node: *Node, sb_head: *stringbuilder, prefix: string): string
   assert(node and node.kind == NodeKind.WHILE_LOOP)
   assert(sb_head)
 
-  local cond_val: string = cgen.expr(node, node.cond, sb_head)
+  local cond_val: string = cgen.expr(node, node.cond, sb_head, prefix)
 
   local sb: stringbuilder
   sb:write("while (", cond_val, ") {\n", cgen.scope(node, sb_head), "\n}")
   return sb:promote()
 end
 
-function cgen.id_decl(scope: *Node, node: *Node, sb_head: *stringbuilder): string
+function cgen.id_decl(scope: *Node, node: *Node, sb_head: *stringbuilder, prefix: string): string
   assert(scope and scope:is_scope())
   assert(node and node.kind == NodeKind.ID_DECL)
   assert(sb_head)
+
+  if not node.used then
+    return ""
+  end
 
   local sb: stringbuilder
 
   local final_value: string
   if node.val then
-    final_value = cgen.expr(scope, node.val, sb_head)
+    final_value = cgen.expr(scope, node.val, sb_head, prefix)
   else
     final_value = "{0}"
   end
+  local name = prefix .. "_" .. node.name
   local _: niltype = _switch!(node.type, {
     ["string"] = (do
-      sb:write("String ", node.name, " = ", final_value, ";\n")
+      sb:write("String ", name, " = ", final_value, ";\n")
       in nil
     end),
     ["i64"] = (do
-      sb:write("int64_t ", node.name, " = ", final_value, ";\n")
+      sb:write("int64_t ", name, " = ", final_value, ";\n")
       in nil
     end),
-    ["proc_def"] = (do
-      sb:write("anon_func_", anon_func_count, "_type ", node.name, " = anon_func_", anon_func_count, ";\n")
+    ["anon_proc_def"] = (do
+      sb:write("anon_func_", anon_func_count, "_type ", name, " = anon_func_", anon_func_count, ";\n")
       in nil
     end),
+    ["proc_def"] = nil,
     _default = (do
-      print(NodeKind_tostring(node.kind))
       error(("Unhandled node type '%s'"):format(node.type))
       in nil
     end),
@@ -2093,7 +2333,7 @@ function cgen.id_decl(scope: *Node, node: *Node, sb_head: *stringbuilder): strin
   return sb:promote()
 end
 
-cgen.scope = function(scope: *Node, sb_head: *stringbuilder): string
+cgen.scope = function(scope: *Node, sb_head: *stringbuilder, prefix: string): string
   assert(scope and scope:is_scope())
   assert(sb_head)
 
@@ -2101,11 +2341,15 @@ cgen.scope = function(scope: *Node, sb_head: *stringbuilder): string
   for i, child in ipairs(scope.children) do
     local child_str: string = _switch!(child.kind, {
       [NodeKind.COMMENT] = "",
-      [NodeKind.PROC_CALL] = cgen.expr(scope, child, sb_head) .. ";\n",
-      [NodeKind.WHILE_LOOP] = cgen.while_loop(child, sb_head),
+      [NodeKind.PROC_CALL] = cgen.expr(scope, child, sb_head, prefix) .. ";\n",
+      [NodeKind.PROC_DEF] = (do
+        cgen.proc_def(child, sb_head, prefix)
+        in ""
+      end),
+      [NodeKind.WHILE_LOOP] = cgen.while_loop(child, sb_head, prefix),
       [NodeKind.BREAK] = "break;\n",
       [NodeKind.ID_DECL] = (do
-        local id_decl: string = cgen.id_decl(scope, child, sb_head)
+        local id_decl: string = cgen.id_decl(scope, child, sb_head, prefix)
         if scope.kind == NodeKind.AST and child.val and child.val.kind ~= NodeKind.PROC_CALL then
           sb_head:write(id_decl)
           in ""
@@ -2116,14 +2360,14 @@ cgen.scope = function(scope: *Node, sb_head: *stringbuilder): string
         local ret_sb: stringbuilder
         ret_sb:write("return ")
         if child.val then
-          ret_sb:write(cgen.expr(scope, child.val, sb_head))
+          ret_sb:write(cgen.expr(scope, child.val, sb_head, prefix))
         end
         ret_sb:write(";\n")
         in ret_sb:promote()
       end),
       [NodeKind.ASSIGNMENT] = (do
         local assign_sb: stringbuilder
-        assign_sb:write(child.name, " = ", cgen.expr(scope, child.val, sb_head), ";\n")
+        assign_sb:write(child.name, " = ", cgen.expr(scope, child.val, sb_head, prefix), ";\n")
         in assign_sb:promote()
       end),
       _default = (do
@@ -2137,7 +2381,7 @@ cgen.scope = function(scope: *Node, sb_head: *stringbuilder): string
   return sb:promote()
 end
 
-function cgen.final(scope: *Node): string
+function cgen.final(scope: *Node, file_name: string): string
   assert(scope and scope:is_scope())
 
   local sb_main: stringbuilder
@@ -2154,7 +2398,7 @@ typedef struct {
 
 ]])
 
-  local scope_str = cgen.scope(scope, &sb_head)
+  local scope_str = cgen.scope(scope, &sb_head, file_name)
   sb_main:write(
     sb_head:promote(),
     "\nint main(int argc, char** argv) {\n",
@@ -2167,13 +2411,10 @@ end
 
 -- BUILD SECTION --
 
-local function build_run_c_code(c_code: string, path: string): integer
-  local file_name_match, file_name_seq = path:match("(.-)%.my_lang")
-  local file_name = file_name_seq[1]
+local function build_run_c_code(c_code: string, file_name: string): integer
   if not file_name:match("^/") then
     file_name = "./" .. file_name
   end
-  file_name = file_name .. "_my_lang"
 
   local GEN_C_PATH <const> = file_name .. ".c"
   local file, err = io.open(GEN_C_PATH, "w")
@@ -2220,8 +2461,12 @@ end
 
 local ast = res:get_ok()
 
-local c_code = cgen.final(ast)
+local file_name_match, file_name_seq = path:match("(.-)%..-$")
+local file_name = file_name_seq[1]
+file_name = file_name .. "_my_lang"
+
+local c_code = cgen.final(ast, file_name)
 
 -- print(c_code)
 
-return build_run_c_code(c_code, path)
+return build_run_c_code(c_code, file_name)
