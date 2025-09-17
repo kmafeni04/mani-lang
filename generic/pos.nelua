@@ -1,0 +1,6 @@
+local Pos = @record{
+  line: integer,
+  col: integer
+}
+
+return Pos

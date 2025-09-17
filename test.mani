@@ -1,0 +1,7 @@
+X : type = record{
+  name: string,
+  age: i64,
+  chars: [5]string
+}
+
+# x: X = { name = "james", age = 10 }

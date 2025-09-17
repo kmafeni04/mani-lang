@@ -1,0 +1,2419 @@
+local varaint = require "variant-nelua.variant"
+local Result = varaint.Result
+local Option = varaint.Option
+
+local Pos = require "..generic.pos"
+local lang_info = require "..generic.lang_info"
+
+local pos_to_line_col = require ".pos_to_line_col"
+
+local tokenizer = require ".tokenizer"
+local Token = tokenizer.Token
+local TokenKind = tokenizer.TokenKind
+local TokenKind_tostring = tokenizer.TokenKind_tostring
+
+local ErrLoc = require ".errloc"
+local ErrLocKind = ErrLoc.ErrLocKind
+
+local binary_ops = map!(TokenKind, TokenKind, {
+  [TokenKind.PLUS] = TokenKind.PLUS,
+  [TokenKind.MINUS] = TokenKind.MINUS,
+  [TokenKind.OPEN_ANGLE] = TokenKind.OPEN_ANGLE,
+  [TokenKind.CLOSE_ANGLE] = TokenKind.CLOSE_ANGLE,
+})
+
+local builtin_procs = map!(string, string, {
+  ["print"] = "print",
+})
+
+local Parser = @record{
+  path: string,
+  index: integer,
+  content: string,
+  tokens: sequence(Token)
+}
+
+local NewParserResult = @Result(Parser, ErrLoc)
+function Parser.new(path: string, content: string): NewParserResult
+  local tokenize_res = tokenizer.tokenize(path, content)
+  if tokenize_res:is_err() then
+    return NewParserResult.err(tokenize_res:get_err())
+  end
+  return NewParserResult.ok({
+    path = path,
+    index = 1,
+    content = content,
+    tokens = tokenize_res:get_ok(),
+  })
+end
+
+function Parser:peek()
+  if self.index <= #self.tokens then
+    return self.tokens[self.index]
+  end
+
+  local line, col = pos_to_line_col(#self.content, self.content)
+  return Token{
+    kind = TokenKind.EOF,
+    val = "",
+    s_pos = {
+      line = line,
+      col = col,
+    },
+    e_pos = {
+      line = line,
+      col = col,
+    },
+    s_index = #self.content,
+    e_index = #self.content,
+  }
+end
+
+function Parser:peek_next()
+  if self.index + 1 <= #self.tokens then
+    return self.tokens[self.index + 1]
+  end
+
+  local line, col = pos_to_line_col(#self.content, self.content)
+  return Token{
+    kind = TokenKind.EOF,
+    val = "",
+    s_pos = {
+      line = line,
+      col = col,
+    },
+    e_pos = {
+      line = line,
+      col = col,
+    },
+    s_index = #self.content,
+    e_index = #self.content,
+  }
+end
+
+function Parser:peek_prev()
+  if self.index - 1 <= #self.tokens then
+    return self.tokens[self.index - 1]
+  end
+
+  local line, col = pos_to_line_col(#self.content, self.content)
+  return Token{
+    kind = TokenKind.EOF,
+    val = "",
+    s_pos = {
+      line = line,
+      col = col,
+    },
+    e_pos = {
+      line = line,
+      col = col,
+    },
+    s_index = #self.content,
+    e_index = #self.content,
+  }
+end
+
+function Parser:advance()
+  local token  = self:peek()
+  self.index = self.index + 1
+  return token
+end
+
+local ExpectResult = @Result(Token, ErrLoc)
+
+function Parser:peek_one_of(token_kinds: sequence(TokenKind), msg: string): ExpectResult
+  assert(#token_kinds > 0)
+
+  local token = self:peek()
+
+  for _, token_kind in ipairs(token_kinds) do
+    range_check!(token_kind, TokenKind)
+    if token_kind == token.kind then
+      return ExpectResult.ok(token)
+    end
+  end
+
+  local sb: stringbuilder
+  if msg ~= "" then
+    sb:write(msg)
+  elseif #token_kinds == 1 then
+    sb:write("Expected TokenKind '", TokenKind_tostring(token_kinds[1]), "' but got '", TokenKind_tostring(token.kind), "'")
+  else
+    sb:write("Expected one of TokenKinds '{ ")
+    for _, token_kind in  ipairs(token_kinds) do
+      range_check!(token_kind, TokenKind)
+      sb:write(TokenKind_tostring(token_kind))
+      sb:write(", ")
+    end
+    sb:rollback(2)
+    sb:write(" }' but got '", TokenKind_tostring(token.kind), "'")
+  end
+
+  return ExpectResult.err{
+    path = self.path,
+    content = self.content,
+    s_index = token.s_index,
+    e_index = token.e_index,
+    err = sb:promote(),
+    kind = ErrLocKind.SYNTAX,
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    e_pos = {
+      line = token.e_pos.line,
+      col = token.e_pos.col,
+    },
+  }
+end
+
+function Parser:expect_one_of(token_kinds: sequence(TokenKind), msg: string): ExpectResult
+  local res = self:peek_one_of(token_kinds, msg)
+  self:advance()
+  return res
+end
+
+function Parser:expect(token_kind: TokenKind, msg: string): ExpectResult
+  return self:expect_one_of({ token_kind }, msg)
+end
+
+function Parser:advance_comma_unless(token_kind: TokenKind): ExpectResult
+  range_check!(token_kind, TokenKind)
+
+  local token = self:peek()
+  if token.kind == TokenKind.COMMA then
+    if self:peek_next().kind == token_kind or self:peek_next().kind == TokenKind.EOF then
+      return ExpectResult.err({
+        path = self.path,
+        content = self.content,
+        s_index = token.s_index,
+        e_index = token.e_index,
+        err = "Trailing comma",
+        kind = ErrLocKind.SYNTAX,
+        s_pos = {
+          line = token.s_pos.line,
+          col = token.s_pos.col,
+        },
+        e_pos = {
+          line = token.e_pos.line,
+          col = token.e_pos.col,
+        },
+      })
+    end
+    return ExpectResult.ok(self:advance())
+  end
+
+  if token.kind ~= token_kind and token.kind ~= TokenKind.EOF then
+    return ExpectResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = token.s_index,
+      e_index = token.e_index,
+      err = ("Expected Token value ',' but got '%s'"):format(token.val),
+      kind = ErrLocKind.SYNTAX,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
+
+  return ExpectResult.ok(token)
+end
+
+function Parser:advance_comma_until(token_kind: TokenKind): ExpectResult
+  range_check!(token_kind, TokenKind)
+
+  local token = self:peek()
+  if token.kind == TokenKind.COMMA then
+    return ExpectResult.ok(self:advance())
+  end
+
+  if token.kind ~= token_kind and token.kind ~= TokenKind.EOF then
+    return ExpectResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = token.s_index,
+      e_index = token.e_index,
+      err = ("Expected Token value ',' but got '%s'"):format(token.val),
+      kind = ErrLocKind.SYNTAX,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
+
+  return ExpectResult.ok(token)
+end
+
+local Node <forwarddecl> = @record{}
+
+local NodeKind = @enum{
+  _UNDEFINED = 0,
+  ARRAY,
+  ASSIGNMENT,
+  AST,
+  BINARY_OP,
+  BREAK,
+  COMMENT,
+  FOR_LOOP,
+  ID,
+  ID_DECL,
+  INDEX,
+  INIT_FIELD,
+  INIT_LIST,
+  LITERAL,
+  PROC_CALL,
+  PROC_DEF,
+  RETURN,
+  SCOPE,
+  TYPE,
+  WHILE_LOOP,
+  _COUNT
+}
+
+local function NodeKind_tostring(kind: NodeKind): string
+  range_check!(kind, NodeKind)
+  ## for _, field in ipairs(NodeKind.value.fields) do
+    if #[field.value]# == kind then
+      return #[field.name]#
+    end
+  ## end
+  error("UNREACHABLE")
+  return ""
+end
+
+local Annotations = @record{
+  constant: boolean
+}
+
+Node = @record{
+  kind: NodeKind,
+
+  s_pos: Pos,
+  e_pos: Pos,
+  s_index: integer,
+  e_index: integer,
+
+  constant: boolean,
+  name: string,
+  type: *Node,
+  children: sequence(*Node),
+  scope: *Node,
+
+  annotations: Annotations,
+
+  -- Scope
+  content: string,
+
+  -- ProcDef
+  params: sequence(*Node),
+  ret_t: *Node,
+
+  -- ProcCall
+  args: sequence(*Node),
+
+  id: *Node,
+
+  -- BinOp
+  lhs: *Node,
+  op: string,
+  rhs: *Node,
+
+  -- WhileLoop
+  cond: *Node,
+
+  -- Literal
+  lit_val: string,
+
+  -- IdDecl
+  used: boolean,
+
+  -- Array
+  len: uinteger,
+
+  -- Record
+  fields: sequence(*Node),
+  -- binary_ops: hashmap(TokenKind, BinOpFn),
+  is_builtin: boolean,
+  is_base: boolean,
+  is_boolean: boolean,
+  is_scalar: boolean,
+  is_integral: boolean,
+  is_float: boolean,
+  is_string: boolean,
+  is_array: boolean,
+  is_rec: boolean,
+  is_void: boolean,
+  is_pointer: boolean,
+  is_proc: boolean,
+
+  is_i64: boolean,
+  is_f64: boolean,
+
+  is_anonymous: boolean,
+
+  val: *Node,
+
+}
+
+local Parser.Node = Node
+local Parser.NodeKind = NodeKind
+local Parser.NodeKind_tostring = NodeKind_tostring
+
+local base_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "type",
+  is_builtin = true,
+  is_base = true
+}
+base_type.type = &base_type
+
+local i64_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "i64",
+  is_builtin = true,
+  is_scalar = true,
+  is_integral = true,
+  is_i64 = true,
+  type = &base_type
+}
+
+local f64_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "f64",
+  is_builtin = true,
+  is_scalar = true,
+  is_float = true,
+  is_f64 = true,
+  type = &base_type
+}
+
+local u8_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "u8",
+  is_builtin = true,
+  is_scalar = true,
+  is_integral = true,
+  type = &base_type,
+}
+
+local usize_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "usize",
+  is_builtin = true,
+  type = &base_type
+}
+
+local string_data_type: Node = {
+  kind = NodeKind.TYPE,
+
+  type = &base_type,
+  val = &u8_type,
+  len = 0,
+  is_array = true
+}
+
+local string_data: Node = {
+  kind = NodeKind.ID_DECL,
+  name = "data",
+  type = &string_data_type,
+}
+
+local string_size: Node = {
+  kind = NodeKind.ID_DECL,
+  name = "size",
+  type = &usize_type,
+}
+
+local string_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "string",
+  is_builtin = true,
+  is_string = true,
+  is_rec = true,
+  fields = {
+    &string_data,
+    &string_size,
+  },
+  type = &base_type
+}
+
+local boolean_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "boolean",
+  is_builtin = true,
+  is_boolean = true,
+  type = &base_type
+}
+
+local void_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "void",
+  is_builtin = true,
+  is_void = true,
+  type = &base_type
+}
+
+local Np = @*Node
+local builtin_types = map!(string, Np, {
+  [base_type.name] = &base_type,
+  [i64_type.name] = &i64_type,
+  [f64_type.name] = &f64_type,
+  [u8_type.name] = &u8_type,
+  [usize_type.name] = &usize_type,
+  [string_type.name] = &string_type,
+  [boolean_type.name] = &boolean_type,
+  [void_type.name] = &void_type,
+})
+
+local Parser.builtin_types = builtin_types
+
+function Node:is_scope(): boolean
+  range_check!(self.kind, NodeKind)
+
+  switch self.kind do
+    case
+      NodeKind.AST,
+      NodeKind.SCOPE,
+      NodeKind.WHILE_LOOP,
+      NodeKind.PROC_DEF
+    then
+      return true
+    else
+      return false
+  end
+end
+
+local function new_number_literal(number: string, token: Token, scope: *Node): *Node
+  assert(scope and scope:is_scope())
+
+  local num_type = tostring(number):match("[%.eE]") and builtin_types["f64"] or builtin_types["i64"]
+  local val: string = num_type.name == "i64" and tostring(tointeger(number)) or tostring(tonumber(number))
+
+  local node = new(Node)
+
+  $node = {
+    kind = NodeKind.LITERAL,
+
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    e_pos = {
+      line = token.e_pos.line,
+      col = token.e_pos.col,
+    },
+    s_index = token.s_index,
+    e_index = token.e_index,
+    scope = scope,
+
+    type = num_type,
+    lit_val = val,
+  }
+
+  return node
+end
+
+local function new_string_literal(token: Token, scope: *Node): *Node
+  assert(scope and scope:is_scope())
+
+  local node = new(Node)
+
+  $node = {
+    kind = NodeKind.LITERAL,
+
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    e_pos = {
+      line = token.e_pos.line,
+      col = token.e_pos.col,
+    },
+    s_index = token.s_index,
+    e_index = token.e_index,
+    scope = scope,
+
+    type = builtin_types["string"],
+    lit_val = token.val,
+  }
+
+  return node
+end
+
+local function new_boolean_literal(token: Token, scope: *Node): *Node
+  assert(scope and scope:is_scope())
+
+  local node = new(Node)
+
+  $node = {
+    kind = NodeKind.LITERAL,
+
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    e_pos = {
+      line = token.e_pos.line,
+      col = token.e_pos.col,
+    },
+    s_index = token.s_index,
+    e_index = token.e_index,
+    scope = scope,
+
+    type = builtin_types["boolean"],
+    lit_val = token.val,
+  }
+
+  return node
+end
+
+local ParseResult = @Result(*Node, ErrLoc)
+
+local Parser.parse_scope: function(self: *Parser, scope: *Node, till: TokenKind): ParseResult
+local Parser.parse_id_decl: function(self: *Parser, scope: *Node): ParseResult
+local Parser.parse_proc_call: function(self: *Parser, scope: *Node): ParseResult
+local Parser.parse_type: function(self: *Parser, scope: *Node): ParseResult
+local Parser.parse_expr: function(self: *Parser, scope: *Node, lhs: *Node): ParseResult
+
+function Parser.find_id_up_scope(scope: *Node, name: string, s_index: integer): Option(*Node)
+  assert(scope and scope:is_scope())
+
+  for _, node in ipairs(scope.children) do
+    if (node.kind == NodeKind.ID_DECL or node.kind == NodeKind.PROC_DEF) and node.name == name and node.s_index <= s_index then
+      node.used = true
+      return Option.Some(node)
+    end
+  end
+
+  if scope.scope then
+    return Parser.find_id_up_scope(scope.scope, name, s_index)
+  end
+  return Option.None()
+end
+
+local function get_returns(scope: *Node, rets: sequence(*Node))
+  assert(scope and scope:is_scope())
+  for _, child in ipairs(scope.children) do
+    if child.kind == NodeKind.RETURN then
+      rets:push(child)
+    end
+
+    if child:is_scope() then
+      get_returns(child, rets)
+    end
+  end
+end
+
+function Parser:parse_anon_proc_def(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.KEYWORD_PROC)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local token = expect_res:get_ok()
+
+  local anon_proc_def = new(Node)
+
+  $anon_proc_def = {
+    kind = NodeKind.PROC_DEF,
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    s_index = token.s_index,
+
+    name = "anon_proc_def",
+    scope = scope,
+  }
+
+  expect_res  = self:expect(TokenKind.OPEN_PAREN)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  while self:peek().kind ~= TokenKind.CLOSE_PAREN do
+    local parse_res: ParseResult = self:parse_id_decl(scope)
+    if parse_res:is_err() then
+      return parse_res
+    end
+
+    local param = parse_res:get_ok()
+    anon_proc_def.params:push(param)
+    anon_proc_def.children:push(param)
+
+    expect_res = self:advance_comma_unless(TokenKind.CLOSE_PAREN)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
+  end
+
+  expect_res = self:expect(TokenKind.CLOSE_PAREN)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  expect_res = self:expect(TokenKind.COLON)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  local parse_res = self:parse_type(scope)
+  if parse_res:is_err() then
+    return parse_res
+  end
+
+  anon_proc_def.ret_t = parse_res:get_ok()
+
+  expect_res = self:expect(TokenKind.OPEN_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  while self:peek().kind ~= TokenKind.EOF do
+    local parse_res = self:parse_scope(anon_proc_def, TokenKind.CLOSE_CURLY)
+    if parse_res:is_err() then
+      return parse_res
+    else
+      break
+    end
+  end
+
+  local rets: sequence(*Node)
+  get_returns(anon_proc_def, &rets)
+  for _, ret in ipairs(rets) do
+    local ret_stmt_val = ret.val
+    if ret_stmt_val.type ~= anon_proc_def.ret_t then
+      return ParseResult.err({
+        path = self.path,
+        content = self.content,
+        s_index = ret_stmt_val.s_index,
+        e_index = ret_stmt_val.e_index,
+        err = ("Return statement type '%s' does not match previously defined return type '%s'"):format(ret_stmt_val.type, anon_proc_def.ret_t),
+        kind = ErrLocKind.SEMANTIC,
+        s_pos = {
+          line = ret_stmt_val.s_pos.line,
+          col = ret_stmt_val.s_pos.col,
+        },
+        e_pos = {
+          line = ret_stmt_val.e_pos.line,
+          col = ret_stmt_val.e_pos.col,
+        },
+      })
+    end
+  end
+
+  local token = self:peek()
+  if token.kind ~= TokenKind.CLOSE_CURLY then
+    return ParseResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = token.s_index,
+      e_index = token.e_index,
+      err = ("Expected Token '%s' but got '%s'"):format(TokenKind_tostring(TokenKind.CLOSE_CURLY), TokenKind_tostring(token.kind)),
+      kind = ErrLocKind.SEMANTIC,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
+  self:advance()
+
+  anon_proc_def.e_index = token.e_index
+  anon_proc_def.e_pos = {
+    line = token.e_pos.line,
+    col = token.e_pos.col,
+  }
+  anon_proc_def.content = self.content:sub(anon_proc_def.s_index, anon_proc_def.e_index)
+
+  local anon_proc_type = new(Node)
+  $anon_proc_type = {
+    kind = NodeKind.TYPE,
+    name = "anon_proc_def",
+    is_proc = true,
+    is_anonymous = true,
+    params = anon_proc_def.params,
+    ret_t = anon_proc_def.ret_t,
+    type = &base_type
+  }
+  anon_proc_def.type = anon_proc_type
+
+  return ParseResult.ok(anon_proc_def)
+end
+
+function Parser:parse_proc_def(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.KEYWORD_PROC)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local token = expect_res:get_ok()
+
+  local expect_res = self:expect(TokenKind.IDENTIFIER)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local proc_def_name = expect_res:get_ok().val
+
+  local proc_def = new(Node)
+
+  $proc_def = {
+    kind = NodeKind.PROC_DEF,
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    s_index = token.s_index,
+    scope = scope,
+
+    name = proc_def_name,
+  }
+
+  expect_res = self:expect(TokenKind.OPEN_PAREN)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  while self:peek().kind ~= TokenKind.CLOSE_PAREN do
+    local parse_res: ParseResult = self:parse_id_decl(scope)
+    if parse_res:is_err() then
+      return parse_res
+    end
+
+    local param = parse_res:get_ok()
+    proc_def.params:push(param)
+    proc_def.children:push(param)
+
+    expect_res = self:advance_comma_unless(TokenKind.CLOSE_PAREN)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
+  end
+
+  expect_res = self:expect(TokenKind.CLOSE_PAREN)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  expect_res = self:expect(TokenKind.COLON)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  local parse_res = self:parse_type(scope)
+  if parse_res:is_err() then
+    return parse_res
+  end
+  proc_def.ret_t = parse_res:get_ok()
+
+  expect_res = self:expect(TokenKind.OPEN_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  local proc_type = new(Node)
+  $proc_type = {
+    kind = NodeKind.TYPE,
+    name = "proc_def",
+    is_proc = true,
+    params = proc_def.params,
+    ret_t = proc_def.ret_t,
+    type = &base_type
+  }
+  proc_def.type = proc_type
+
+  local proc_id_decl = new(Node)
+
+  $proc_id_decl = {
+    s_pos = {
+      line = proc_def.s_pos.line,
+      col = proc_def.s_pos.col,
+    },
+    e_pos = {},
+    s_index = proc_def.s_index,
+    kind = NodeKind.ID_DECL,
+    scope = scope,
+  }
+
+  proc_id_decl.name = proc_def.name
+  proc_id_decl.val = proc_def
+  proc_id_decl.type = proc_def.type
+
+  proc_def.children:push(proc_id_decl)
+  while self:peek().kind ~= TokenKind.EOF do
+    local parse_res = self:parse_scope(proc_def, TokenKind.CLOSE_CURLY)
+    if parse_res:is_err() then
+      return parse_res
+    else
+      break
+    end
+  end
+
+  local rets: sequence(*Node)
+  get_returns(proc_def, &rets)
+  for _, ret in ipairs(rets) do
+    local ret_stmt_val = ret.val
+    if ret_stmt_val.type ~= proc_def.ret_t then
+      return ParseResult.err({
+        path = self.path,
+        content = self.content,
+        s_index = ret_stmt_val.s_index,
+        e_index = ret_stmt_val.e_index,
+        err = ("Return statement type '%s' does not match defined return type '%s'"):format(ret_stmt_val.type, proc_def.ret_t),
+        kind = ErrLocKind.SEMANTIC,
+        s_pos = {
+          line = ret_stmt_val.s_pos.line,
+          col = ret_stmt_val.s_pos.col,
+        },
+        e_pos = {
+          line = ret_stmt_val.e_pos.line,
+          col = ret_stmt_val.e_pos.col,
+        },
+      })
+    end
+  end
+
+  local token = self:peek()
+  if token.kind ~= TokenKind.CLOSE_CURLY then
+    return ParseResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = token.s_index,
+      e_index = token.e_index,
+      err = ("Expected Token '%s' but got '%s'"):format(TokenKind_tostring(TokenKind.CLOSE_CURLY), TokenKind_tostring(token.kind)),
+      kind = ErrLocKind.SEMANTIC,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
+  self:advance()
+
+  proc_def.e_index = token.e_index
+  proc_def.e_pos = {
+    line = token.e_pos.line,
+    col = token.e_pos.col,
+  }
+  proc_def.content = self.content:sub(proc_def.s_index, proc_def.e_index)
+
+  return ParseResult.ok(proc_def)
+end
+
+function Parser:parse_anon_rec_def(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.KEYWORD_RECORD)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local start_token = expect_res:get_ok()
+
+  expect_res = self:expect(TokenKind.OPEN_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  local fields: sequence(*Node)
+  while self:peek().kind ~= TokenKind.CLOSE_CURLY do
+    local parse_res = self:parse_id_decl(scope)
+    if parse_res:is_err() then
+      return parse_res
+    end
+    fields:push(parse_res:get_ok())
+
+    expect_res = self:advance_comma_until(TokenKind.CLOSE_CURLY)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
+  end
+
+  expect_res = self:expect(TokenKind.CLOSE_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local token = expect_res:get_ok()
+
+  local anon_rec_node = new(Node)
+  $anon_rec_node = {
+    kind = NodeKind.TYPE,
+    s_pos = {
+      line = start_token.s_pos.line,
+      col = start_token.s_pos.col,
+    },
+    e_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    s_index = start_token.s_index,
+    e_index = token.s_index,
+    scope = scope,
+
+    name = "anon_record",
+    fields = fields,
+    is_rec = true,
+    is_anonymous = true,
+    type = anon_rec_node,
+  }
+
+  return ParseResult.ok(anon_rec_node)
+end
+
+function Parser:parse_array(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.OPEN_BRACKET)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local start_token = expect_res:get_ok()
+
+  local nodes: sequence(*Node)
+  while self:peek().kind ~= TokenKind.CLOSE_BRACKET do
+    local parse_res = self:parse_expr(scope)
+    if parse_res:is_err() then
+      return parse_res
+    end
+
+    local node = parse_res:get_ok()
+
+    if #nodes > 0 then
+      if nodes[#nodes].type ~= node.type then
+        return ParseResult.err({
+          path = self.path,
+          content = self.content,
+          s_index = node.s_index,
+          e_index = node.e_index,
+          err = "Array contains elements of different types",
+          kind = ErrLocKind.SEMANTIC,
+          s_pos = {
+            line = node.s_pos.line,
+            col = node.s_pos.col,
+          },
+          e_pos = {
+            line = node.e_pos.line,
+            col = node.e_pos.col,
+          },
+        })
+      end
+    end
+
+    nodes:push(node)
+
+
+    expect_res = self:advance_comma_unless(TokenKind.CLOSE_BRACKET)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
+
+  end
+
+  expect_res = self:expect(TokenKind.CLOSE_BRACKET)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local token = expect_res:get_ok()
+
+  local array_type = new(Node)
+  local array_type_name_sb: stringbuilder
+  array_type_name_sb:write("[", #nodes, "]", nodes[1].type.name)
+  $array_type = {
+    kind = NodeKind.TYPE,
+    name = array_type_name_sb:promote(),
+    type = builtin_types["type"],
+    val = nodes[1].type,
+    len = #nodes,
+    is_array = true
+  }
+
+  local node = new(Node)
+
+  $node = {
+    kind = NodeKind.ARRAY,
+    s_pos = {
+      line = start_token.s_pos.line,
+      col = start_token.s_pos.col,
+    },
+    e_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    s_index = start_token.s_index,
+    e_index = token.s_index,
+    scope = scope,
+
+    type = array_type,
+    fields = nodes
+  }
+
+  return ParseResult.ok(node)
+end
+
+function Parser:parse_id_index(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.IDENTIFIER)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local start_token = expect_res:get_ok()
+  local token = start_token
+
+  local id_decl_opt = Parser.find_id_up_scope(scope, token.val, token.s_index)
+  if id_decl_opt:is_none() then
+    return ParseResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = token.s_index,
+      e_index = token.e_index,
+      err = ("Undefined identifier '%s'"):format(token.val),
+      kind = ErrLocKind.SYNTAX,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
+
+  local id_decl_node = id_decl_opt:get_some()
+
+  if not id_decl_node.type.is_array then
+    return ParseResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = token.s_index,
+      e_index = token.e_index,
+      err = ("identifier '%s' is not indexable"):format(token.val),
+      kind = ErrLocKind.SYNTAX,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
+
+  local id_node = new(Node)
+  $id_node = {
+    kind = NodeKind.ID,
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    e_pos = {
+      line = token.e_pos.line,
+      col = token.e_pos.col,
+    },
+    s_index = token.s_index,
+    e_index = token.e_index,
+
+    name = token.val,
+    type = id_decl_node.type,
+    scope = scope,
+  }
+
+  local expect_res = self:expect(TokenKind.OPEN_BRACKET)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  local parse_res = self:parse_expr(scope)
+  if parse_res:is_err() then
+    return parse_res
+  end
+
+  local index_val = parse_res:get_ok()
+
+  if not index_val.type.is_integral then
+    return ParseResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = index_val.s_index,
+      e_index = index_val.e_index,
+      err = "index_val must be an integral type",
+      kind = ErrLocKind.SEMANTIC,
+      s_pos = {
+        line = index_val.s_pos.line,
+        col = index_val.s_pos.col,
+      },
+      e_pos = {
+        line = index_val.e_pos.line,
+        col = index_val.e_pos.col,
+      },
+    })
+  end
+
+  if index_val.kind == NodeKind.LITERAL then
+    local idx = tonumber(index_val.lit_val)
+    local array_max_idx = id_decl_node.type.len - 1
+    if idx > array_max_idx then
+      return ParseResult.err({
+        path = self.path,
+        content = self.content,
+        s_index = index_val.s_index,
+        e_index = index_val.e_index,
+        err = ("index '%d' is out of bounds, array max index is '%d'"):format(idx, array_max_idx),
+        kind = ErrLocKind.SEMANTIC,
+        s_pos = {
+          line = index_val.s_pos.line,
+          col = index_val.s_pos.col,
+        },
+        e_pos = {
+          line = index_val.e_pos.line,
+          col = index_val.e_pos.col,
+        },
+      })
+    end
+  end
+
+  local expect_res = self:expect(TokenKind.CLOSE_BRACKET)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  token = expect_res:get_ok()
+
+  local id_index_node = new(Node)
+  $id_index_node = {
+    kind = NodeKind.INDEX,
+    s_pos = {
+      line = start_token.s_pos.line,
+      col = start_token.s_pos.col,
+    },
+    e_pos = {
+      line = token.e_pos.line,
+      col = token.e_pos.col,
+    },
+    s_index = start_token.s_index,
+    e_index = token.e_index,
+
+    type = id_decl_node.type.val,
+    id = id_node,
+    val = index_val,
+    scope = scope,
+  }
+
+  return ParseResult.ok(id_index_node)
+end
+
+function Parser:parse_id(scope: *Node): ParseResult
+  local expect_res = self:expect(TokenKind.IDENTIFIER)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local token = expect_res:get_ok()
+
+  local id_opt: Option(*Node) = Parser.find_id_up_scope(scope, token.val, token.s_index)
+  if id_opt:is_none() then
+    return ParseResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = token.s_index,
+      e_index = token.e_index,
+      err = ("Undeclared identifier '%s'"):format(token.val),
+      kind = ErrLocKind.SEMANTIC,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
+
+  local id_node: *Node = new(Node)
+  $id_node = {
+    kind = NodeKind.ID,
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    e_pos = {
+      line = token.e_pos.line,
+      col = token.e_pos.col,
+    },
+    s_index = token.s_index,
+    e_index = token.e_index,
+
+    name = token.val,
+    type = id_opt:get_some().type,
+    scope = scope,
+  }
+
+  if binary_ops:has(self:peek().kind) then
+    return self:parse_expr(scope, id_node)
+  end
+
+  local node: *Node = new(Node)
+  $node = {
+    kind = NodeKind.ID,
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    e_pos = {
+      line = token.e_pos.line,
+      col = token.e_pos.col,
+    },
+    s_index = token.s_index,
+    e_index = token.e_index,
+
+    name = token.val,
+    type = id_node.type,
+    scope = scope,
+  }
+  return ParseResult.ok(node)
+end
+
+function Parser:parse_init_list(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.OPEN_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local start_token = expect_res:get_ok()
+  local token = start_token
+
+  local fields: sequence(*Node)
+  while self:peek().kind ~= TokenKind.CLOSE_CURLY do
+    expect_res = self:expect(TokenKind.IDENTIFIER)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
+    token = expect_res:get_ok()
+    local field_name = token.val
+
+    expect_res = self:expect(TokenKind.EQUALS)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
+
+    local parse_res = self:parse_expr(scope)
+    if parse_res:is_err() then
+      return parse_res
+    end
+    local val = parse_res:get_ok()
+
+    local init_field_node: *Node = new(Node)
+    $init_field_node = {
+      kind = NodeKind.INIT_FIELD,
+
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = val.e_pos.line,
+        col = val.e_pos.col,
+      },
+      s_index = token.s_index,
+      e_index = val.e_index,
+
+      scope = scope,
+
+      name = field_name,
+      val = val
+    }
+
+    fields:push(init_field_node)
+
+    expect_res = self:advance_comma_until(TokenKind.CLOSE_CURLY)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
+  end
+
+  expect_res = self:expect(TokenKind.CLOSE_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  token = expect_res:get_ok()
+
+  local init_list_node = new(Node)
+  $init_list_node = {
+    kind = NodeKind.INIT_LIST,
+
+    s_pos = {
+      line = start_token.s_pos.line,
+      col = start_token.s_pos.col,
+    },
+    e_pos = {
+      line = token.e_pos.line,
+      col = token.e_pos.col,
+    },
+    s_index = start_token.s_index,
+    e_index = token.e_index,
+
+    scope = scope,
+
+    fields = fields
+  }
+
+  return ParseResult.ok(init_list_node)
+end
+
+Parser.parse_expr = function(self: *Parser, scope: *Node, lhs: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:peek_one_of({
+    TokenKind.CONSTANT_TRUE,
+    TokenKind.CONSTANT_FALSE,
+    TokenKind.CONSTANT_NIL,
+    TokenKind.STRING,
+    TokenKind.NUMBER,
+    TokenKind.IDENTIFIER,
+    TokenKind.KEYWORD_RECORD,
+    TokenKind.KEYWORD_PROC,
+    TokenKind.PLUS,
+    TokenKind.MINUS,
+    TokenKind.OPEN_BRACKET,
+    TokenKind.OPEN_ANGLE,
+    TokenKind.CLOSE_ANGLE,
+    TokenKind.OPEN_CURLY,
+  }, ("Expected an expression but got '%s'"):format(TokenKind_tostring(self:peek().kind)))
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local token = expect_res:get_ok()
+
+  local parse_res: ParseResult = _switch!(token.kind, {
+    [TokenKind.IDENTIFIER] = (do
+      if self:peek_next().kind == TokenKind.OPEN_PAREN then
+        in self:parse_proc_call(scope)
+      elseif self:peek_next().kind == TokenKind.OPEN_BRACKET then
+        in self:parse_id_index(scope)
+      end
+      in self:parse_id(scope)
+    end),
+    [TokenKind.STRING] = (do
+      self:advance()
+      in ParseResult.ok(new_string_literal(token, scope))
+    end),
+    [TokenKind.NUMBER] = (do
+      self:advance()
+      in ParseResult.ok(new_number_literal(token.val, token, scope))
+    end),
+    [{ TokenKind.CONSTANT_TRUE, TokenKind.CONSTANT_FALSE }] = (do
+      self:advance()
+      in ParseResult.ok(new_boolean_literal(token, scope))
+    end),
+    [{ TokenKind.PLUS, TokenKind.MINUS }] = (do
+      self:advance()
+      local res: ParseResult
+      if lhs then
+        local parse_res = self:parse_expr(scope, lhs)
+        if parse_res:is_err() then
+          in parse_res
+        end
+        local rhs: *Node = parse_res:get_ok()
+
+        if rhs.type ~= "i64" or lhs.type ~= "i64" then
+          in ParseResult.err({
+            path = self.path,
+            content = self.content,
+            s_index = lhs.s_index,
+            e_index = rhs.e_index,
+            err = ("Op '%s' is not possible between types '%s' and '%s'"):format(token.val, lhs.type, rhs.type),
+            kind = ErrLocKind.SEMANTIC,
+            s_pos = {
+              line = lhs.s_pos.line,
+              col = lhs.s_pos.col,
+            },
+            e_pos = {
+              line = rhs.e_pos.line,
+              col = rhs.e_pos.col,
+            },
+          })
+        end
+
+        local node: *Node = new(Node)
+        $node = {
+          kind = NodeKind.BINARY_OP,
+
+          s_pos = {
+            line = lhs.s_pos.line,
+            col = lhs.s_pos.col,
+          },
+          e_pos = {
+            line = rhs.e_pos.line,
+            col = rhs.e_pos.col,
+          },
+          s_index = lhs.s_index,
+          e_index = rhs.e_index,
+          scope = scope,
+
+          type = builtin_types["i64"],
+          lhs = lhs,
+          op = token.val,
+          rhs = rhs,
+        }
+        in ParseResult.ok(node)
+      end
+      local op: string = token.val
+      local expect_res = self:expect(TokenKind.NUMBER)
+      if expect_res:is_err() then
+        in ParseResult.err(expect_res:get_err())
+      end
+      in ParseResult.ok(new_number_literal(op .. token.val, token, scope))
+    end),
+    [{ TokenKind.OPEN_ANGLE, TokenKind.CLOSE_ANGLE }] = (do
+      self:advance()
+      local res: ParseResult
+      if not lhs then
+        in ParseResult.err({
+          path = self.path,
+          content = self.content,
+          s_index = token.s_index,
+          e_index = token.e_index,
+          err = ("Op '%s' must be preceded by an expression"):format(token.val),
+          kind = ErrLocKind.SEMANTIC,
+          s_pos = {
+            line = token.s_pos.line,
+            col = token.s_pos.col,
+          },
+          e_pos = {
+            line = token.e_pos.line,
+            col = token.e_pos.col,
+          },
+        })
+      end
+      local parse_res = self:parse_expr(scope, lhs)
+      if parse_res:is_err() then
+        in parse_res
+      end
+      local rhs: *Node = parse_res:get_ok()
+
+      if rhs.type ~= "i64" or lhs.type ~= "i64" then
+        in ParseResult.err({
+          path = self.path,
+          content = self.content,
+          s_index = lhs.s_index,
+          e_index = rhs.e_index,
+          err = ("Op '%s' is not possible between types '%s' and '%s'"):format(token.val, lhs.type, rhs.type),
+          kind = ErrLocKind.SEMANTIC,
+          s_pos = {
+            line = lhs.s_pos.line,
+            col = lhs.s_pos.col,
+          },
+          e_pos = {
+            line = rhs.e_pos.line,
+            col = rhs.e_pos.col,
+          },
+        })
+      end
+
+      local node: *Node = new(Node)
+      $node = {
+        kind = NodeKind.BINARY_OP,
+
+        s_pos = {
+          line = lhs.s_pos.line,
+          col = lhs.s_pos.col,
+        },
+        e_pos = {
+          line = rhs.e_pos.line,
+          col = rhs.e_pos.col,
+        },
+        s_index = lhs.s_index,
+        e_index = rhs.e_index,
+        scope = scope,
+
+        type = builtin_types["i64"],
+        lhs = lhs,
+        op = token.val,
+        rhs = rhs,
+      }
+      in ParseResult.ok(node)
+    end),
+    [TokenKind.KEYWORD_PROC] = self:parse_anon_proc_def(scope),
+    [TokenKind.KEYWORD_RECORD] = self:parse_anon_rec_def(scope),
+    [TokenKind.OPEN_BRACKET] = self:parse_array(scope),
+    [TokenKind.OPEN_CURLY] = self:parse_init_list(scope),
+    _default = (do
+      error(("Unexpected TokenKind '%s'"):format(TokenKind_tostring(token.kind)))
+      in ParseResult.err({})
+    end),
+  })
+  if parse_res:is_err() then
+    return parse_res
+  end
+
+  local node = parse_res:get_ok()
+
+  token = self:peek()
+  if binary_ops:has(token.kind) then
+    parse_res = self:parse_expr(scope, node)
+    if parse_res:is_err() then
+      return parse_res
+    end
+  end
+
+  return parse_res
+end
+
+function Parser:parse_array_type(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.OPEN_BRACKET)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local start_token = expect_res:get_ok()
+
+  expect_res = self:expect(TokenKind.NUMBER)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local array_size:integer = tointeger(expect_res:get_ok().val)
+
+  expect_res = self:expect(TokenKind.CLOSE_BRACKET)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  local parse_res = self:parse_type(scope)
+  if parse_res:is_err() then
+    return parse_res
+  end
+
+  local sub_type = parse_res:get_ok()
+
+  local last_token = self:peek_prev()
+
+  local array_type_name_sb: stringbuilder
+  array_type_name_sb:write("[", array_size, "]", sub_type.name)
+
+  local node = new(Node)
+
+  $node = {
+    kind = NodeKind.TYPE,
+    s_pos = {
+      line = start_token.s_pos.line,
+      col = start_token.s_pos.col,
+    },
+    e_pos = {
+      line = last_token.e_pos.line,
+      col = last_token.e_pos.col,
+    },
+    s_index = start_token.s_index,
+    e_index = last_token.e_index,
+    scope = scope,
+
+    name = array_type_name_sb:promote(),
+    type = builtin_types["type"],
+    val = sub_type,
+    len = array_size,
+    is_array = true
+  }
+  return ParseResult.ok(node)
+end
+
+function Parser:parse_pointer_type(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  error("TODO: Parser:parse_pointer_type")
+  return
+end
+
+Parser.parse_type = function(self: *Parser, scope: *Node): ParseResult
+  local parse_res: ParseResult
+
+  local token = self:peek()
+  if token.kind == TokenKind.IDENTIFIER then
+    self:advance()
+    local id_decl_opt = Parser.find_id_up_scope(scope, token.val, token.s_index)
+    if id_decl_opt:is_none() and not builtin_types:has(token.val) then
+      return ParseResult.err({
+        path = self.path,
+        content = self.content,
+        s_index = token.s_index,
+        e_index = token.e_index,
+        err = ("Undeclared identifier '%s'"):format(token.val),
+        kind = ErrLocKind.SEMANTIC,
+        s_pos = {
+          line = token.s_pos.line,
+          col = token.s_pos.col,
+        },
+        e_pos = {
+          line = token.e_pos.line,
+          col = token.e_pos.col,
+        },
+      })
+    end
+
+    if id_decl_opt:is_some() then
+      local id_decl = id_decl_opt:get_some()
+      if id_decl.type.kind ~= NodeKind.TYPE then
+        return ParseResult.err({
+          path = self.path,
+          content = self.content,
+          s_index = token.s_index,
+          e_index = token.e_index,
+          err = ("identifier '%s' is not a type"):format(token.val),
+          kind = ErrLocKind.SEMANTIC,
+          s_pos = {
+            line = token.s_pos.line,
+            col = token.s_pos.col,
+          },
+          e_pos = {
+            line = token.e_pos.line,
+            col = token.e_pos.col,
+          },
+        })
+      end
+
+      local id_node = new(Node)
+      $id_node = {
+        kind = NodeKind.ID,
+        s_pos = {
+          line = token.s_pos.line,
+          col = token.s_pos.col,
+        },
+        e_pos = {
+          line = token.e_pos.line,
+          col = token.e_pos.col,
+        },
+        s_index = token.s_index,
+        e_index = token.e_index,
+
+        name = token.val,
+        type = id_decl.type,
+        scope = scope,
+      }
+      parse_res = ParseResult.ok(id_node)
+    else
+      local ok, t = builtin_types:has_and_get(token.val)
+      assert(ok)
+      parse_res = ParseResult.ok(t)
+    end
+  elseif token.kind == TokenKind.OPEN_BRACKET then
+    parse_res = self:parse_array_type(scope)
+  elseif token.kind == TokenKind.STAR then
+    local parse_res = self:parse_pointer_type(scope)
+  elseif token.kind == TokenKind.EQUALS then
+    parse_res = ParseResult.ok(nilptr) -- Ignore and continue
+  elseif token.kind == TokenKind.OPEN_ANGLE then
+    parse_res = ParseResult.ok(nilptr) -- Ignore and continue
+  else
+    error(("Unexpected TokenKind '%s'"):format(TokenKind_tostring(token.kind)))
+  end
+  return parse_res
+end
+
+function Parser.compare_types(typ1: *Node, typ2: *Node): Option(ErrLoc)
+  assert(typ1 and (typ1.kind == NodeKind.TYPE or (typ1.kind == NodeKind.ID and typ1.type.kind == NodeKind.TYPE)))
+  assert(typ2 and (typ2.kind == NodeKind.TYPE or (typ2.kind == NodeKind.ID and typ2.type.kind == NodeKind.TYPE)))
+
+  local t1: *Node
+  if typ1.kind == NodeKind.TYPE then
+    t1 = typ1
+  else
+   t1 = typ1.type
+  end
+
+  local t2: *Node
+  if typ2.kind == NodeKind.TYPE then
+    t2 = typ2
+  else
+   t2 = typ2.type
+  end
+
+  if t1.is_array and t2.is_array then
+    if t1.len >= t2.len and t1.val == t2.val then
+      return Option.None()
+    end
+  elseif t1.is_base and t2.is_rec then
+    error("TODO: rec to base type conversion")
+    $t1 = $t2
+    return Option.None()
+  else
+    if t1 == t2 then
+      return Option.None()
+    end
+  end
+
+  error("TODO: Type comparison")
+  return
+end
+
+local AnnotationResult = @Result(Annotations, ErrLoc)
+
+function Parser:parse_annotations(): AnnotationResult
+  local expect_res = self:expect(TokenKind.OPEN_ANGLE)
+  if expect_res:is_err() then
+    return AnnotationResult.err(expect_res:get_err())
+  end
+  local token = expect_res:get_ok()
+
+  local annotations: Annotations
+  while self:peek().kind ~= TokenKind.CLOSE_ANGLE do
+    expect_res = self:expect(TokenKind.IDENTIFIER)
+    if expect_res:is_err() then
+      return AnnotationResult.err(expect_res:get_err())
+    end
+    token = expect_res:get_ok()
+    local _: niltype = _switch!(token.val, {
+      ["const"] = (do
+        annotations.constant = true
+        in nil
+      end),
+      _default = (do
+        error(("Unexpected annotation '%s'"):format(token.val))
+        in nil
+      end)
+    })
+
+    expect_res = self:advance_comma_unless(TokenKind.CLOSE_ANGLE)
+    if expect_res:is_err() then
+      return AnnotationResult.err(expect_res:get_err())
+    end
+  end
+
+  expect_res = self:expect(TokenKind.CLOSE_ANGLE)
+  if expect_res:is_err() then
+    return AnnotationResult.err(expect_res:get_err())
+  end
+  token = expect_res:get_ok()
+
+  return AnnotationResult.ok(annotations)
+end
+
+function Parser:check_rec_fields(id: *Node, init_list: *Node): Option(ErrLoc)
+  assert(id and id.kind == NodeKind.ID)
+  assert(id.type.is_rec)
+  assert(init_list and init_list.kind == NodeKind.INIT_LIST)
+
+  local id_t_fields: hashmap(string, *Node)
+  for _, field in ipairs(id.type.fields) do
+    id_t_fields[field.name] = field
+  end
+
+  for _, field in ipairs(init_list.fields) do
+    local ok, id_field = id_t_fields:has_and_get(field.name)
+    if not ok then
+      return Option.Some(ErrLoc{
+        kind = ErrLocKind.SEMANTIC,
+        path = self.path,
+        content = self.content,
+        s_index = field.s_index,
+        e_index = field.e_index,
+        err = ("field '%s' is not present in record '%s'"):format(field.name, id.name),
+        s_pos = {
+          line = field.s_pos.line,
+          col = field.s_pos.col,
+        },
+        e_pos = {
+          line = field.e_pos.line,
+          col = field.e_pos.col,
+        },
+      })
+    end
+
+    if not Parser.compare_types(id_field.type, field.val.type) then
+      return Option.Some(ErrLoc{
+        path = self.path,
+        content = self.content,
+        s_index = field.s_index,
+        e_index = field.e_index,
+        err = ("Defined declaration type '%s' does not match value type '%s'"):format(id_field.type.name, field.val.type.name),
+        kind = ErrLocKind.SEMANTIC,
+        s_pos = {
+          line = field.s_pos.line,
+          col = field.s_pos.col,
+        },
+        e_pos = {
+          line = field.e_pos.line,
+          col = field.e_pos.col,
+        },
+      })
+    end
+  end
+
+  return Option.None()
+end
+
+Parser.parse_id_decl = function(self: *Parser, scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.IDENTIFIER)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local start_token = expect_res:get_ok()
+  local token = start_token
+
+  local decl_name = token.val
+
+  local id_opt = Parser.find_id_up_scope(scope, decl_name, token.s_index)
+  if id_opt:is_some() then
+    return ParseResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = token.s_index,
+      e_index = token.e_index,
+      err = ("Redeclaration of identifier '%s'"):format(token.val),
+      kind = ErrLocKind.SEMANTIC,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
+
+  expect_res = self:expect(TokenKind.COLON)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  token = expect_res:get_ok()
+
+  local parse_res = self:parse_type(scope)
+  if parse_res:is_err() then
+    return parse_res
+  end
+  local decl_type: *Node = parse_res:get_ok()
+  -- print(decl_type.name, decl_type.is_rec)
+
+  token = self:peek()
+  local annotations: Annotations
+  if token.kind == TokenKind.OPEN_ANGLE then
+    local annon_res = self:parse_annotations()
+    if annon_res:is_err() then
+      return ParseResult.err(annon_res:get_err())
+    end
+    annotations = annon_res:get_ok()
+  end
+
+  token = self:peek()
+  local node: *Node
+  if token.kind == TokenKind.EQUALS then
+    self:advance()
+    local parse_res = self:parse_expr(scope)
+    if parse_res:is_err() then
+      return parse_res
+    end
+    node = parse_res:get_ok()
+  end
+
+  if node then
+    error("TODO: Redo type comparison")
+  end
+
+  token = self:peek_prev()
+
+  local id_decl = new(Node)
+  $id_decl = {
+    kind = NodeKind.ID_DECL,
+    s_pos = {
+      line = start_token.s_pos.line,
+      col = start_token.s_pos.col,
+    },
+    e_pos = {
+      line = token.e_pos.line,
+      col = token.e_pos.col,
+    },
+    s_index = start_token.s_index,
+    e_index = token.e_index,
+
+    name = decl_name,
+    val = node,
+    type = decl_type,
+    annotations = annotations,
+    scope = scope,
+  }
+
+  return ParseResult.ok(id_decl)
+end
+
+Parser.parse_proc_call = function(self: *Parser, scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.IDENTIFIER)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local token = expect_res:get_ok()
+
+  local proc_id_opt = Parser.find_id_up_scope(scope, token.val, token.s_index)
+  if proc_id_opt:is_none() and not builtin_procs:has(token.val) then
+    return ParseResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = token.s_index,
+      e_index = token.e_index,
+      err = ("Undefined function '%s'"):format(token.val),
+      kind = ErrLocKind.SYNTAX,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
+
+  if proc_id_opt:is_some() then
+    local proc_id = proc_id_opt:get_some()
+    if not proc_id.type.is_proc then
+      return ParseResult.err({
+        path = self.path,
+        content = self.content,
+        s_index = token.s_index,
+        e_index = token.e_index,
+        err = ("Identifier '%s' is not a function"):format(proc_id.name),
+        kind = ErrLocKind.SYNTAX,
+        s_pos = {
+          line = token.s_pos.line,
+          col = token.s_pos.col,
+        },
+        e_pos = {
+          line = token.e_pos.line,
+          col = token.e_pos.col,
+        },
+      })
+    end
+  end
+
+  local proc_call_type: *Node
+  local proc_id: *Node
+  if proc_id_opt:is_some() then
+    proc_id = proc_id_opt:get_some()
+    if proc_id.val and proc_id.val.is_anonymous then
+      proc_call_type = proc_id.val.ret_t
+    else
+      proc_call_type = proc_id.ret_t
+    end
+  end
+
+  local proc_call = new(Node)
+  $proc_call = {
+    kind = NodeKind.PROC_CALL,
+
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    s_index = token.s_index,
+    scope = scope,
+
+    name = token.val,
+    type = proc_call_type,
+  }
+
+  expect_res = self:expect(TokenKind.OPEN_PAREN)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  while self:peek().kind ~= TokenKind.CLOSE_PAREN do
+    local parse_res: ParseResult = self:parse_expr(scope)
+    if parse_res:is_err() then
+      return parse_res
+    end
+    proc_call.args:push(parse_res:get_ok())
+
+    expect_res = self:advance_comma_unless(TokenKind.CLOSE_PAREN)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
+  end
+
+  expect_res = self:expect(TokenKind.CLOSE_PAREN)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  token = expect_res:get_ok()
+
+  proc_call.e_index = token.e_index
+  proc_call.e_pos = {
+    line = token.e_pos.line,
+    col = token.e_pos.col,
+  }
+
+  if proc_id then
+    local params: sequence(*Node)
+    if proc_id.val and proc_id.val.is_anonymous then
+      params = proc_id.val.params
+    else
+      params = proc_id.params
+    end
+    if #proc_call.args ~= #params then
+      return ParseResult.err({
+        path = self.path,
+        content = self.content,
+        s_index = proc_call.s_index,
+        e_index = proc_call.e_index,
+        err = ("Procedure '%s' expects %d arguements but is receiving %s"):format(proc_id.name, #proc_id.val.params, #proc_call.args),
+        kind = ErrLocKind.SYNTAX,
+        s_pos = {
+          line = proc_call.s_pos.line,
+          col = proc_call.s_pos.col,
+        },
+        e_pos = {
+          line = proc_call.e_pos.line,
+          col = proc_call.e_pos.col,
+        },
+      })
+    end
+    for i, arg in ipairs(proc_call.args) do
+      if arg.type ~= proc_id.val.params[i].type then
+        return ParseResult.err({
+          path = self.path,
+          content = self.content,
+          s_index = arg.s_index,
+          e_index = arg.e_index,
+          err = ("Arg %d in procedure call '%s', with type '%s', does not match defined type '%s'"):format(i, proc_id.name, arg.type, proc_id.val.params[i].type),
+          kind = ErrLocKind.SEMANTIC,
+          s_pos = {
+            line = arg.s_pos.line,
+            col = arg.s_pos.col,
+          },
+          e_pos = {
+            line = arg.e_pos.line,
+            col = arg.e_pos.col,
+          },
+        })
+      end
+    end
+  end
+
+  return ParseResult.ok(proc_call)
+end
+
+function Parser:parse_while_loop(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.KEYWORD_WHILE)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local token = expect_res:get_ok()
+
+  local while_loop = new(Node)
+
+  $while_loop = {
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    s_index = token.s_index,
+    kind = NodeKind.WHILE_LOOP,
+    scope = scope,
+  }
+
+  local parse_res = self:parse_expr(scope)
+  if parse_res:is_err() then
+    return parse_res
+  end
+  local cond = parse_res:get_ok()
+
+  expect_res = self:expect(TokenKind.OPEN_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  token = expect_res:get_ok()
+
+  while self:peek().kind ~= TokenKind.EOF do
+    parse_res = self:parse_scope(while_loop, TokenKind.CLOSE_CURLY)
+    if parse_res:is_err() then
+      return parse_res
+    else
+      break
+    end
+  end
+
+  expect_res = self:expect(TokenKind.CLOSE_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  token = expect_res:get_ok()
+
+  while_loop.e_index = token.e_index
+  while_loop.e_pos = {
+    line = token.e_pos.line,
+    col = token.e_pos.col,
+  }
+  while_loop.content = self.content:sub(while_loop.s_index, while_loop.e_index)
+  while_loop.cond = cond
+
+  return ParseResult.ok(while_loop)
+end
+
+function Parser:parse_assignment(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.IDENTIFIER)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local start_token = expect_res:get_ok()
+  local token = start_token
+
+  local id_decl_opt: Option(*Node) = Parser.find_id_up_scope(scope, token.val, token.s_index)
+  if id_decl_opt:is_none() then
+    return ParseResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = token.s_index,
+      e_index = token.e_index,
+      err = ("Undeclared identifier '%s'"):format(token.val),
+      kind = ErrLocKind.SEMANTIC,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
+
+  local id_node = new(Node)
+  $id_node = {
+    kind = NodeKind.ID,
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    e_pos = {
+      line = token.e_pos.line,
+      col = token.e_pos.col,
+    },
+    s_index = token.s_index,
+    e_index = token.e_index,
+
+    name = token.val,
+    type = id_decl_opt:get_some().type,
+    scope = scope,
+  }
+
+  expect_res = self:expect(TokenKind.EQUALS)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  local parse_res = self:parse_expr(scope)
+  if parse_res:is_err() then
+    return parse_res
+  end
+  local val = parse_res:get_ok()
+
+  if val.type ~= id_node.type then
+    return ParseResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = token.s_index,
+      e_index = val.e_index,
+      err = ("type '%s' does not match identifier '%s' type '%s' in assignment"):format(val.type, id_node.name, id_node.type),
+      kind = ErrLocKind.SEMANTIC,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = val.e_pos.line,
+        col = val.e_pos.col,
+      },
+    })
+  end
+
+  local assignment_node: *Node = new(Node)
+  $assignment_node = {
+    kind = NodeKind.ASSIGNMENT,
+
+    s_pos = {
+      line = start_token.s_pos.line,
+      col = start_token.s_pos.col,
+    },
+    e_pos = {
+      line = val.e_pos.line,
+      col = val.e_pos.col,
+    },
+    scope = scope,
+
+    s_index = start_token.s_index,
+    e_index = val.e_index,
+
+    id = id_node,
+    val = val
+  }
+  return ParseResult.ok(assignment_node)
+end
+
+Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): ParseResult
+  assert(scope and scope:is_scope())
+  assert(till > 0)
+  assert(till < TokenKind._COUNT)
+
+  local token = self:peek()
+  if token.kind == till then
+    return ParseResult.ok(scope)
+  end
+
+  local res: ParseResult = _switch!(token.kind, {
+    [TokenKind.COMMENT] = (do
+      self:advance()
+      local node: *Node = new(Node)
+      $node = {
+        s_pos = {
+          line = token.s_pos.line,
+          col = token.s_pos.col,
+        },
+        e_pos = {
+          line = token.e_pos.line,
+          col = token.e_pos.col,
+        },
+        s_index = token.s_index,
+        e_index = token.e_index,
+        kind = NodeKind.COMMENT,
+        scope = scope,
+      }
+      in ParseResult.ok(node)
+    end),
+    [TokenKind.IDENTIFIER] = (do
+      local res: ParseResult = _switch!(self:peek_next().kind, {
+        [TokenKind.OPEN_PAREN] = self:parse_proc_call(scope),
+        [TokenKind.COLON] = self:parse_id_decl(scope),
+        [TokenKind.EQUALS] = self:parse_assignment(scope),
+        _default = (do
+          error(("Unexpected Token: %s('%s')"):format(TokenKind_tostring(token.kind), token.val))
+          in ParseResult.err({})
+        end)
+      })
+      in res
+    end),
+    [TokenKind.KEYWORD_WHILE] = self:parse_while_loop(scope),
+    [TokenKind.KEYWORD_BREAK] = (do
+      -- TODO: Assert that break is the child of a loop
+      self:advance()
+      local node: *Node = new(Node)
+      $node = {
+        s_pos = {
+          line = token.s_pos.line,
+          col = token.s_pos.col,
+        },
+        e_pos = {
+          line = token.e_pos.line,
+          col = token.e_pos.col,
+        },
+        s_index = token.s_index,
+        e_index = token.e_index,
+        kind = NodeKind.BREAK,
+        scope = scope,
+      }
+      in ParseResult.ok(node)
+    end),
+    [TokenKind.KEYWORD_RETURN] = (do
+      self:advance()
+      local node: *Node = new(Node)
+      local _node: Node = $node
+      _node = {
+        s_pos = {
+          line = token.s_pos.line,
+          col = token.s_pos.col,
+        },
+        s_index = token.s_index,
+        kind = NodeKind.RETURN,
+        scope = scope,
+      }
+
+      local ret_value: *Node
+      if self:peek().kind ~= TokenKind.CLOSE_CURLY then
+        local parse_res = self:parse_expr(scope)
+        if parse_res:is_err() then
+          in parse_res
+        end
+
+        ret_value = parse_res:get_ok()
+      end
+
+      _node.e_pos = {
+        line = ret_value.e_pos.line,
+        col = ret_value.e_pos.col,
+      }
+      _node.val = ret_value
+      _node.e_index = ret_value.e_index
+      $node = _node
+      in ParseResult.ok(node)
+    end),
+    [TokenKind.KEYWORD_PROC] = self:parse_proc_def(scope),
+    _default = (do
+      error(("Unexpected Token: %s('%s')"):format(TokenKind_tostring(token.kind), token.val))
+      in ParseResult.err({})
+    end),
+  })
+  if res:is_err() then
+    return res
+  end
+
+  local node = res:get_ok()
+  scope.children:push(node)
+
+  return self:parse_scope(scope, till)
+end
+
+function Parser:parse(): ParseResult
+  local ast = new(Node)
+  local s_line, s_col = pos_to_line_col(1, self.content)
+  local e_line, e_col = pos_to_line_col(#self.content, self.content)
+  $ast = {
+    kind = NodeKind.AST,
+
+    s_pos = {
+      line = s_line,
+      col = s_col
+    },
+    e_pos = {
+      line = e_line,
+      col = e_col
+    },
+    s_index = 1,
+    e_index = #self.content,
+    scope = nilptr,
+
+    content = self.content,
+  }
+  local res = self:parse_scope(ast, TokenKind.EOF)
+  if res:is_err() then
+    return ParseResult.err(res:get_err())
+  end
+  return ParseResult.ok(res:get_ok())
+end
+
+return Parser

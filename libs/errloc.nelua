@@ -1,0 +1,67 @@
+local AnsiColor = require 'ansicolor-nelua.ansicolor'
+
+local Pos = require "..generic.pos"
+
+local ErrLocKind = @enum{
+  _UNDEFINED = 0,
+  SEMANTIC,
+  SYNTAX,
+  _COUNT
+}
+
+local ErrLoc = @record{
+  path: string,
+  content: string,
+  err: string,
+  kind: ErrLocKind,
+  s_pos: Pos,
+  e_pos: Pos,
+  s_index: integer,
+  e_index: integer
+}
+
+local ErrLoc.ErrLocKind = ErrLocKind
+
+function ErrLoc.ErrLocKind_tostring(kind: ErrLocKind): string
+  range_check!(kind, ErrLocKind)
+  ## for _, field in ipairs(ErrLocKind.value.fields) do
+    if #[field.value]# == kind then
+      return #[field.name:lower()]#
+    end
+  ## end
+  error("UNREACHABLE")
+  return ""
+end
+
+
+-- NOTE: This isn't complete as it does not take into account multiline errors
+function ErrLoc:tostring()
+  local error_line: string
+  local line_no = 1
+  for _, line_span in (self.content .. "\n"):gmatch("([^\n]*)\n") do
+    if line_no == self.s_pos.line then
+      error_line = line_span[0]
+      break
+    end
+    line_no = line_no + 1
+  end
+
+  local sb: stringbuilder
+  sb:write(
+    self.path,
+    AnsiColor.new((":%d:%d: "):format(self.s_pos.line, self.s_pos.col)):Bright():tostring(),
+    AnsiColor.new(ErrLoc.ErrLocKind_tostring(self.kind)):Red():Bright():tostring(),
+    AnsiColor.new(" error: "):Red():Bright():tostring(),
+    AnsiColor.new(("%s"):format(self.err)):Bright():tostring(),
+    "\n",
+    error_line,
+    "\n",
+    string.rep(" ", self.s_pos.col - 1),
+    AnsiColor.new("^"):Green():Bright():tostring(),
+    AnsiColor.new(string.rep("~", self.e_pos.col - self.s_pos.col)):Magenta():Bright():tostring(),
+    "\n"
+  )
+  return sb:promote()
+end
+
+return ErrLoc

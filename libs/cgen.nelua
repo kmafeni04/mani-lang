@@ -1,0 +1,538 @@
+local Parser = require ".parser"
+local Node = Parser.Node
+local NodeKind = Parser.NodeKind
+local NodeKind_tostring = Parser.NodeKind_tostring
+local builtin_types = Parser.builtin_types
+
+local varaint = require "variant-nelua.variant"
+local Option = varaint.Option
+
+local lang_info = require "..generic.lang_info"
+
+local cgen = @record{}
+
+local cgen.scope: function(scope: *Node, sb_head: *stringbuilder, prefix: string): string
+local cgen.expr: function(scope: *Node, node: *Node, sb_head: *stringbuilder, prefix: string): string
+
+local print_funcs: sequence(string)
+local anon_func_count = 0
+local anon_rec_count = 0
+
+function cgen.string(s: string): string
+  return ('{ "%s", %d }'):format(s, #s)
+end
+
+function cgen.binary_op(node: *Node): string
+  assert(node and node.kind == NodeKind.BINARY_OP)
+  local sb: stringbuilder
+
+
+  local lhs_value: string = _switch!(node.lhs.kind, {
+    [NodeKind.ID] = node.lhs.name,
+    [NodeKind.LITERAL] = node.lhs.type == "string" and "(String)" .. cgen.string(node.lhs.lit_val) or node.lhs.lit_val,
+    _default = (do
+      error(("Unhandled lhs kind '%s'"):format(NodeKind_tostring(node.lhs.kind)))
+      in ""
+    end)
+  })
+  local rhs_value: string = _switch!(node.rhs.kind, {
+    [NodeKind.ID] = node.rhs.name,
+    [NodeKind.LITERAL] = node.rhs.type == "string" and "(String)" .. cgen.string(node.rhs.lit_val) or node.rhs.lit_val,
+    _default = (do
+      error(("Unhandled rhs kind '%s'"):format(NodeKind_tostring(node.rhs.kind)))
+      in ""
+    end)
+  })
+
+  sb:write(lhs_value, " ", node.op, " ", rhs_value)
+  return sb:promote()
+end
+
+function cgen.type(t: *Node): string
+  assert(t and t.kind == NodeKind.TYPE)
+
+  local str: string = _switch!(true, {
+    [t.is_string] = "String",
+    [t.is_i64] = "int64_t",
+    [t.is_boolean] = "bool",
+    [t.is_void] = "void",
+    [t.is_array] = cgen.type(t.val),
+    _default = (do
+      error(("Unhandled type '%s'"):format(t.name))
+      in ""
+    end),
+  })
+  return str
+end
+
+function cgen.anon_proc_def(node: *Node, sb_head: *stringbuilder)
+  assert(sb_head)
+
+  assert(node.kind == NodeKind.PROC_DEF)
+  assert(node.type.is_anonymous)
+
+  anon_func_count = anon_func_count + 1
+  local sb: stringbuilder
+
+  for _, param in ipairs(node.params) do
+    for i, child in ipairs(node.children) do
+      if param == child then
+        node.children:remove(i)
+        break
+      end
+    end
+  end
+
+  local ret_t = cgen.type(node.ret_t)
+
+  sb:write("typedef ", ret_t, " (*anon_func_", anon_func_count, "_type)(")
+  if #node.params > 0 then
+    for _, param in ipairs(node.params) do
+      sb:write(cgen.type(param.type), " ", param.name, ", ")
+    end
+    sb:rollback(2)
+  end
+  sb:write(");\n\n")
+  sb:write(ret_t, " anon_func_", anon_func_count, "(")
+  if #node.params > 0 then
+    for _, param in ipairs(node.params) do
+      sb:write(cgen.type(param.type), " ", param.name, ", ")
+    end
+    sb:rollback(2)
+  end
+  sb:write(") {\n") -- cgen.scope runs before the write of "{\n" so it was seperated
+  sb:write(cgen.scope(node, sb_head), "};\n\n")
+
+  sb_head:write(sb:promote())
+
+end
+
+function cgen.proc_def(node: *Node, sb_head: *stringbuilder, prefix: string)
+  assert(sb_head)
+
+  assert(node.kind == NodeKind.PROC_DEF)
+  assert(node.type.is_proc)
+
+  if not node.used then
+    return
+  end
+
+  local sb: stringbuilder
+
+  for _, param in ipairs(node.params) do
+    for i, child in ipairs(node.children) do
+      if param == child then
+        node.children:remove(i)
+        break
+      end
+    end
+  end
+
+  local ret_t = cgen.type(node.ret_t)
+
+  local name = prefix .. "_" .. node.name
+
+  sb:write("typedef ", ret_t, " (*", name, "_type)(")
+  if #node.params > 0 then
+    for _, param in ipairs(node.params) do
+      sb:write(cgen.type(param.type), " ", param.name, ", ")
+    end
+    sb:rollback(2)
+  end
+  sb:write(");\n\n")
+  sb:write(ret_t, " ", name, "(")
+  if #node.params > 0 then
+    for _, param in ipairs(node.params) do
+      sb:write(cgen.type(param.type), " ", param.name, ", ")
+    end
+    sb:rollback(2)
+  end
+  sb:write(") {\n") -- cgen.scope runs before the write of "{\n" so it was seperated
+  sb:write(cgen.scope(node, sb_head), "};\n\n")
+
+  sb_head:write(sb:promote())
+
+end
+
+local function print_arg_snippet(prefix: string, t: *Node): string
+  assert(t and t.kind == NodeKind.TYPE)
+
+  local sb: stringbuilder
+
+  local _: niltype _switch!(true, {
+    [t.is_string] = (do
+      sb:write(
+        "if(",
+        prefix,
+        ".size > 0) {\n",
+        "fwrite(",
+        prefix,
+        ".data, 1, ",
+        prefix,
+        '.size, stdout);\n} else { fputs("", stdout); }\n'
+      )
+      in nil
+    end),
+    [t.is_integral] = (do
+      sb:write('fprintf(stdout, "%ld", ', prefix, ");\n")
+      in nil
+    end),
+    [t.is_float] = (do
+      sb:write('fprintf(stdout, "%g", ', prefix, ");\n")
+      in nil
+    end),
+    _default = (do
+      error(("TODO: Unhandled arg type '%s'"):format(t.name))
+      in nil
+    end),
+    [t.is_array] = (do
+      sb:write('fputs("[", stdout);\n')
+      local print_comma = 'fputs(",", stdout);\n'
+      if t.len > 0 then
+        for j = 1, t.len do
+          if t.val.is_string then
+            sb:write('fputs("\\"", stdout);\n')
+          end
+          sb:write(print_arg_snippet(prefix .. "[" .. j-1 .. "]", t.val))
+          if t.val.is_string then
+            sb:write('fputs("\\"", stdout);\n')
+          end
+          sb:write(print_comma)
+        end
+        sb:rollback(#print_comma)
+      end
+      sb:write('fputs("]", stdout);\n')
+      in nil
+    end),
+    [t.is_boolean] = (do
+      sb:write('fputs(', prefix, ' ? "true" : "false", stdout);')
+      in nil
+    end),
+    _default = (do
+      error(("TODO: Unhandled arg type '%s'"):format(t.name))
+      in nil
+    end),
+  })
+
+  return sb:promote()
+end
+
+function cgen.print(scope: *Node, node: *Node, sb_head: *stringbuilder, prefix: string): string
+  assert(scope and scope:is_scope())
+  assert(node and node.kind == NodeKind.PROC_CALL)
+  assert(sb_head)
+
+  local sb: stringbuilder
+  sb:write("void ", lang_info.LANG_NAME, "_print_", #print_funcs + 1, " (")
+
+  local print_args_sb: stringbuilder
+
+  if # node.args > 0 then
+    for i, arg in ipairs(node.args) do
+      sb:write(cgen.type(arg.type), " a", i)
+      if arg.type.is_array then
+        sb:write(" [", arg.type.len, "] ")
+      end
+      sb:write(", ")
+      print_args_sb:write(arg.type, ", ")
+    end
+    sb:rollback(2)
+  end
+  local print_funcs_i = 0
+  for i, v in ipairs(print_funcs) do
+    if v == print_args_sb:view() then
+      print_funcs_i = i
+      break
+    end
+  end
+
+  if print_funcs_i == 0 then
+    print_funcs:push(print_args_sb:promote())
+    sb:write(") {\n")
+
+    if #node.args > 0 then
+      for i, arg in ipairs(node.args) do
+        sb:write(print_arg_snippet("a" .. i, arg.type))
+        sb:write("fflush(stdout);\n")
+        sb:write('fputs("\\t", stdout);\n')
+      end
+      sb:rollback(#('fputs("\\t", stdout);\n'))
+    end
+    sb:write('fputs("\\n", stdout);\n')
+    sb:write("};\n\n")
+    sb_head:write(sb:promote())
+  end
+  local print_sb: stringbuilder
+  print_sb:write(lang_info.LANG_NAME, "_print_", print_funcs_i > 0 and print_funcs_i or #print_funcs, "(")
+  if #node.args > 0 then
+    for _, arg in ipairs(node.args) do
+      print_sb:write(cgen.expr(scope, arg, sb_head, prefix))
+      print_sb:write(", ")
+    end
+    print_sb:rollback(2)
+  end
+
+  print_sb:write(")")
+  return print_sb:promote()
+end
+
+function cgen.proc_call(scope: *Node, sb_head: *stringbuilder, node: *Node, prefix: string): string
+  assert(scope and scope:is_scope())
+  assert(sb_head)
+  assert(node and node.kind == NodeKind.PROC_CALL)
+
+  local sb: stringbuilder
+  sb:write(prefix, "_", node.name, "(")
+  if #node.args > 0 then
+    for _, arg in ipairs(node.args) do
+      sb:write(cgen.expr(scope, arg, sb_head, prefix), ", ")
+    end
+    sb:rollback(2)
+  end
+  sb:write(")")
+  return sb:promote()
+end
+
+function cgen.array(scope: *Node, node: *Node, sb_head: *stringbuilder, prefix: string): string
+  local sb: stringbuilder
+  sb:write("{")
+  if # node.fields > 0 then
+    for _: integer, v: *Node in ipairs(node.fields) do
+      sb:write(cgen.expr(scope, v, sb_head, prefix), ",")
+    end
+    sb:rollback(1)
+  end
+  sb:write("}")
+  return sb:promote()
+end
+
+function cgen.anon_rec_def(node: *Node, sb_head: *stringbuilder)
+  assert(node.kind == NodeKind.TYPE)
+  assert(node.is_anonymous)
+
+  assert(sb_head)
+
+
+  anon_rec_count = anon_rec_count + 1
+  local sb: stringbuilder
+
+  sb:write("typedef struct{\n")
+  for _, field in ipairs(node.fields) do
+    sb:write(cgen.type(field.type), " ", field.name)
+    if field.type.is_array then
+      sb:write("[", field.type.len, "]")
+    end
+    sb:write(";\n")
+  end
+  sb:write("} anon_rec_", anon_rec_count, ";\n")
+
+  sb_head:write(sb:promote())
+end
+
+cgen.expr = function(scope: *Node, node: *Node, sb_head: *stringbuilder, prefix: string): string
+  assert(scope and scope:is_scope())
+  assert(sb_head)
+
+  local str: string = _switch!(node.kind, {
+    [NodeKind.PROC_CALL] = (do
+      local proc_call_sb: stringbuilder
+      local id: Option(*Node) = Parser.find_id_up_scope(scope, node.name, node.s_index)
+      if not (id:is_some() and id:get_some().name == "print") and node.name == "print" then
+        proc_call_sb:write(cgen.print(scope, node, sb_head, prefix))
+      else
+        proc_call_sb:write(cgen.proc_call(scope, sb_head, node, prefix))
+      end
+      in proc_call_sb:promote()
+    end),
+    [NodeKind.LITERAL] = (do
+      if node.type == builtin_types["string"] then
+        in "(String)" .. cgen.string(node.lit_val)
+      elseif node.type == builtin_types["i64"] then
+        in node.lit_val
+      elseif node.type == builtin_types["boolean"] then
+        in node.lit_val
+      else
+        error(("Unhandled literal node type '%s'"):format(node.type.name))
+      end
+      in ""
+    end),
+    [NodeKind.BINARY_OP] = cgen.binary_op(node),
+    [NodeKind.PROC_DEF] = (do
+      if node.type.is_anonymous then
+        cgen.anon_proc_def(node, sb_head)
+      end
+      in ""
+    end),
+    [NodeKind.ARRAY] = cgen.array(scope, node, sb_head, prefix),
+    [NodeKind.ID] = (do
+      local id_sb: stringbuilder
+      id_sb:write(prefix, "_", node.name)
+      in id_sb:promote()
+    end),
+    [NodeKind.INDEX] = (do
+      -- TODO: Bounds checking
+      local index_sb: stringbuilder
+      index_sb:write(cgen.expr(scope, node.id, sb_head, prefix), "[", cgen.expr(scope, node.val, sb_head, prefix), "]")
+      in index_sb:promote()
+    end),
+    [NodeKind.TYPE] = (do
+      if node.is_rec then
+        if node.is_anonymous then
+          cgen.anon_rec_def(node, sb_head)
+        end
+      else
+        error(("Unknown type '%s'"):format(node.name))
+      end
+      in ""
+    end),
+    _default = (do
+      error(("Unexpected expr node kind: '%s'"):format(NodeKind_tostring(node.kind)))
+      in ""
+    end),
+  })
+
+  return str
+end
+
+function cgen.while_loop(node: *Node, sb_head: *stringbuilder, prefix: string): string
+  assert(node and node.kind == NodeKind.WHILE_LOOP)
+  assert(sb_head)
+
+  local cond_val: string = cgen.expr(node, node.cond, sb_head, prefix)
+
+  local sb: stringbuilder
+  sb:write("while (", cond_val, ") {\n", cgen.scope(node, sb_head), "\n}")
+  return sb:promote()
+end
+
+function cgen.id_decl(scope: *Node, node: *Node, sb_head: *stringbuilder, prefix: string): string
+  assert(scope and scope:is_scope())
+  assert(node and node.kind == NodeKind.ID_DECL)
+  assert(sb_head)
+
+  if not node.used then
+    return ""
+  end
+
+  local sb: stringbuilder
+
+  local final_value: string
+  if node.val then
+    final_value = cgen.expr(scope, node.val, sb_head, prefix)
+  else
+    final_value = "{0}"
+  end
+  local name = prefix .. "_" .. node.name
+  local _: niltype = _switch!(true, {
+    [node.type.is_string] = (do
+      sb:write("String ", name, " = ", final_value, ";\n")
+      in nil
+    end),
+    [node.type.is_i64] = (do
+      sb:write("int64_t ", name, " = ", final_value, ";\n")
+      in nil
+    end),
+    [node.type.is_proc] = (do
+      if node.type.is_anonymous then
+        sb:write("anon_func_", anon_func_count, "_type ", name, " = anon_func_", anon_func_count, ";\n")
+      end
+      in nil
+    end),
+    [node.type.is_array] = (do
+      sb:write( cgen.type(node.type) , " ", name, "[", node.type.len, "] = ", final_value, ";\n")
+      in nil
+    end),
+    [node.type.is_rec] = (do
+      if node.type.is_anonymous then
+        sb:write("typedef anon_rec_", anon_rec_count, " ", name, ";\n")
+      else
+        error()
+      end
+      in nil
+    end),
+    _default = (do
+      error(("Unhandled node type '%s'"):format(node.type.name))
+      in nil
+    end),
+  })
+  sb:write("\n")
+  return sb:promote()
+end
+
+cgen.scope = function(scope: *Node, sb_head: *stringbuilder, prefix: string): string
+  assert(scope and scope:is_scope())
+  assert(sb_head)
+
+  local sb: stringbuilder
+  for i, child in ipairs(scope.children) do
+    local child_str: string = _switch!(child.kind, {
+      [NodeKind.COMMENT] = "",
+      [NodeKind.PROC_CALL] = cgen.expr(scope, child, sb_head, prefix) .. ";\n",
+      [NodeKind.PROC_DEF] = (do
+        cgen.proc_def(child, sb_head, prefix)
+        in ""
+      end),
+      [NodeKind.WHILE_LOOP] = cgen.while_loop(child, sb_head, prefix),
+      [NodeKind.BREAK] = "break;\n",
+      [NodeKind.ID_DECL] = (do
+        local id_decl: string = cgen.id_decl(scope, child, sb_head, prefix)
+        if scope.kind == NodeKind.AST and child.val and child.val.kind ~= NodeKind.PROC_CALL then
+          sb_head:write(id_decl)
+          in ""
+        end
+        in id_decl
+      end),
+      [NodeKind.RETURN] = (do
+        local ret_sb: stringbuilder
+        ret_sb:write("return ")
+        if child.val then
+          ret_sb:write(cgen.expr(scope, child.val, sb_head, prefix))
+        end
+        ret_sb:write(";\n")
+        in ret_sb:promote()
+      end),
+      [NodeKind.ASSIGNMENT] = (do
+        local assign_sb: stringbuilder
+        assign_sb:write(child.id.name, " = ", cgen.expr(scope, child.val, sb_head, prefix), ";\n")
+        in assign_sb:promote()
+      end),
+      _default = (do
+        error(("Unexpected child node kind: '%s'"):format(NodeKind_tostring(child.kind)))
+        in ""
+      end),
+    })
+
+    sb:write(child_str)
+  end
+  return sb:promote()
+end
+
+function cgen.final(scope: *Node, file_name: string): string
+  assert(scope and scope:is_scope())
+
+  local sb_main: stringbuilder
+  local sb_head: stringbuilder
+  sb_head:write([[
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdint.h>
+
+typedef struct {
+  char* data;
+  size_t size;
+} String;
+
+]])
+
+  local scope_str = cgen.scope(scope, &sb_head, file_name)
+  sb_main:write(
+    sb_head:promote(),
+    "\nint main(int argc, char** argv) {\n",
+    scope_str,
+    "\n(void)argc;\n(void)(argv);\nreturn 0;\n}"
+  )
+
+  return sb_main:promote()
+end
+
+return cgen
