@@ -1,0 +1,78 @@
+local Parser = require "..libs.parser"
+
+-- TODO: Compare the ast in tests too
+
+do
+  local content = "x := 10"
+  local new_parser_res = Parser.new("id_decl_no_type", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+end
+
+do
+  local content = "x : string = 10"
+  local new_parser_res = Parser.new("id_decl_wrong_type", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_err())
+end
+
+do
+  local content = [[
+X : type <const> = record{
+  name: string,
+  age: i64,
+  chars: [5]string
+}]]
+
+  local new_parser_res = Parser.new("id_decl_anon_rec", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+
+ end
+
+do
+  local content = [[
+X: type = record{
+  name: string,
+  age: i64,
+  chars: [5]string
+}]]
+
+  local new_parser_res = Parser.new("id_decl_anon_rec", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_err())
+
+ end
+
+do
+  local content = [[
+s := "hello world"
+
+print(s.size)
+]]
+
+  local new_parser_res = Parser.new("id_decl_anon_rec", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+
+ end

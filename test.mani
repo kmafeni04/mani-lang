@@ -1,7 +1,10 @@
-X : type = record{
+X: type <const> = record{
   name: string,
   age: i64,
-  chars: [5]string
 }
 
-# x: X = { name = "james", age = 10 }
+x: X = { name = "james", age = 10 }
+
+s := "hello world"
+
+print(x, x.age, s.size)

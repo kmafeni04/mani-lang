@@ -3,9 +3,6 @@ require "os"
 require "arg"
 require "io"
 
-require "map-nelua.map"
-require "switch-nelua.switch"
-
 local AnsiColor = require 'ansicolor-nelua.ansicolor'
 
 local Parser = require ".libs.parser"
@@ -27,10 +24,10 @@ local function build_run_c_code(c_code: string, file_path: string, file_name: st
 
   local build_cmd = "tcc " .. GEN_C_PATH .. " -o " .. file_name .. " -Wextra -Wall && " .. file_name
   local _, _, code = os.execute(build_cmd)
-  -- defer
-  --   os.remove(GEN_C_PATH)
-  --   os.remove(file_name)
-  -- end
+  defer
+    os.remove(GEN_C_PATH)
+    os.remove(file_name)
+  end
   return code
 end
 
@@ -55,20 +52,20 @@ else
   content = file:read("a")
 end
 
-local res = Parser.new(path, content)
-if res:is_err() then
-  io.stderr:write(res:get_err():tostring())
+local new_parser_res = Parser.new(path, content)
+if new_parser_res:is_err() then
+  io.stderr:write(new_parser_res:get_err():tostring())
   os.exit(1)
 end
-local parser = res:get_ok()
+local parser = new_parser_res:get_ok()
 
-local res = parser:parse()
-if res:is_err() then
-  io.stderr:write(res:get_err():tostring())
+local parse_res = parser:parse()
+if parse_res:is_err() then
+  io.stderr:write(parse_res:get_err():tostring())
   os.exit(1)
 end
 
-local ast = res:get_ok()
+local ast = parse_res:get_ok()
 
 local file_path: string, file_name: string
 

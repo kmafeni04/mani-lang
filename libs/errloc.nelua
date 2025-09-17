@@ -10,10 +10,12 @@ local ErrLocKind = @enum{
 }
 
 local ErrLoc = @record{
+  kind: ErrLocKind,
+
   path: string,
   content: string,
   err: string,
-  kind: ErrLocKind,
+
   s_pos: Pos,
   e_pos: Pos,
   s_index: integer,
@@ -34,7 +36,7 @@ function ErrLoc.ErrLocKind_tostring(kind: ErrLocKind): string
 end
 
 
--- NOTE: This isn't complete as it does not take into account multiline errors
+-- TODO: This isn't complete as it does not take into account multiline errors
 function ErrLoc:tostring()
   local error_line: string
   local line_no = 1

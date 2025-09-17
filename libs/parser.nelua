@@ -1,3 +1,6 @@
+require "map-nelua.map"
+require "switch-nelua.switch"
+
 local varaint = require "variant-nelua.variant"
 local Result = varaint.Result
 local Option = varaint.Option
@@ -265,6 +268,7 @@ local NodeKind = @enum{
   BINARY_OP,
   BREAK,
   COMMENT,
+  FIELD,
   FOR_LOOP,
   ID,
   ID_DECL,
@@ -345,7 +349,6 @@ Node = @record{
   fields: sequence(*Node),
   -- binary_ops: hashmap(TokenKind, BinOpFn),
   is_builtin: boolean,
-  is_base: boolean,
   is_boolean: boolean,
   is_scalar: boolean,
   is_integral: boolean,
@@ -356,27 +359,32 @@ Node = @record{
   is_void: boolean,
   is_pointer: boolean,
   is_proc: boolean,
+  is_type_type: boolean,
+  is_type: boolean,
 
   is_i64: boolean,
+  is_u64: boolean,
+  is_u8: boolean,
   is_f64: boolean,
 
   is_anonymous: boolean,
+  is_unbounded: boolean,
 
   val: *Node,
-
 }
 
 local Parser.Node = Node
 local Parser.NodeKind = NodeKind
 local Parser.NodeKind_tostring = NodeKind_tostring
 
-local base_type: Node = {
+local type_type: Node = {
   kind = NodeKind.TYPE,
   name = "type",
   is_builtin = true,
-  is_base = true
+  is_type_type = true,
+  is_type = true
 }
-base_type.type = &base_type
+type_type.type = &type_type
 
 local i64_type: Node = {
   kind = NodeKind.TYPE,
@@ -385,8 +393,9 @@ local i64_type: Node = {
   is_scalar = true,
   is_integral = true,
   is_i64 = true,
-  type = &base_type
+  is_type = true
 }
+i64_type.type = &i64_type
 
 local f64_type: Node = {
   kind = NodeKind.TYPE,
@@ -395,8 +404,20 @@ local f64_type: Node = {
   is_scalar = true,
   is_float = true,
   is_f64 = true,
-  type = &base_type
+  is_type = true
 }
+f64_type.type = &f64_type
+
+local u64_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "u64",
+  is_builtin = true,
+  is_scalar = true,
+  is_integral = true,
+  is_u64 = true,
+  is_type = true
+}
+u64_type.type = &u64_type
 
 local u8_type: Node = {
   kind = NodeKind.TYPE,
@@ -404,24 +425,21 @@ local u8_type: Node = {
   is_builtin = true,
   is_scalar = true,
   is_integral = true,
-  type = &base_type,
+  is_u8 = true,
+  is_type = true
 }
-
-local usize_type: Node = {
-  kind = NodeKind.TYPE,
-  name = "usize",
-  is_builtin = true,
-  type = &base_type
-}
+u8_type.type = &u8_type
 
 local string_data_type: Node = {
   kind = NodeKind.TYPE,
-
-  type = &base_type,
+  name = "*[0]u8",
   val = &u8_type,
   len = 0,
-  is_array = true
+  is_array = true,
+  is_unbounded = true,
+  is_type = true
 }
+string_data_type.type = &string_data_type
 
 local string_data: Node = {
   kind = NodeKind.ID_DECL,
@@ -432,7 +450,7 @@ local string_data: Node = {
 local string_size: Node = {
   kind = NodeKind.ID_DECL,
   name = "size",
-  type = &usize_type,
+  type = &u64_type,
 }
 
 local string_type: Node = {
@@ -445,32 +463,35 @@ local string_type: Node = {
     &string_data,
     &string_size,
   },
-  type = &base_type
+  is_type = true
 }
+string_type.type = &string_type
 
 local boolean_type: Node = {
   kind = NodeKind.TYPE,
   name = "boolean",
   is_builtin = true,
   is_boolean = true,
-  type = &base_type
+  is_type = true
 }
+boolean_type.type = &boolean_type
 
 local void_type: Node = {
   kind = NodeKind.TYPE,
   name = "void",
   is_builtin = true,
   is_void = true,
-  type = &base_type
+  is_type = true
 }
+void_type.type = &void_type
 
 local Np = @*Node
 local builtin_types = map!(string, Np, {
-  [base_type.name] = &base_type,
+  [type_type.name] = &type_type,
   [i64_type.name] = &i64_type,
   [f64_type.name] = &f64_type,
+  [u64_type.name] = &u64_type,
   [u8_type.name] = &u8_type,
-  [usize_type.name] = &usize_type,
   [string_type.name] = &string_type,
   [boolean_type.name] = &boolean_type,
   [void_type.name] = &void_type,
@@ -585,6 +606,7 @@ local Parser.parse_id_decl: function(self: *Parser, scope: *Node): ParseResult
 local Parser.parse_proc_call: function(self: *Parser, scope: *Node): ParseResult
 local Parser.parse_type: function(self: *Parser, scope: *Node): ParseResult
 local Parser.parse_expr: function(self: *Parser, scope: *Node, lhs: *Node): ParseResult
+local Parser.check_node_type: function(self: *Parser, typ: *Node, node: *Node): Option(ErrLoc)
 
 function Parser.find_id_up_scope(scope: *Node, name: string, s_index: integer): Option(*Node)
   assert(scope and scope:is_scope())
@@ -747,10 +769,11 @@ function Parser:parse_anon_proc_def(scope: *Node): ParseResult
     kind = NodeKind.TYPE,
     name = "anon_proc_def",
     is_proc = true,
+    is_type = true,
     is_anonymous = true,
     params = anon_proc_def.params,
     ret_t = anon_proc_def.ret_t,
-    type = &base_type
+    type = anon_proc_type
   }
   anon_proc_def.type = anon_proc_type
 
@@ -833,9 +856,10 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
     kind = NodeKind.TYPE,
     name = "proc_def",
     is_proc = true,
+    is_type = true,
     params = proc_def.params,
     ret_t = proc_def.ret_t,
-    type = &base_type
+    type = proc_type
   }
   proc_def.type = proc_type
 
@@ -974,6 +998,7 @@ function Parser:parse_anon_rec_def(scope: *Node): ParseResult
     fields = fields,
     is_rec = true,
     is_anonymous = true,
+    is_type = true,
     type = anon_rec_node,
   }
 
@@ -1382,6 +1407,109 @@ function Parser:parse_init_list(scope: *Node): ParseResult
   return ParseResult.ok(init_list_node)
 end
 
+function Parser:parse_id_field(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local token = self:peek()
+
+  local parse_res = self:parse_id(scope)
+  if parse_res:is_err() then
+    return parse_res
+  end
+
+  local id = parse_res:get_ok()
+  assert(id.type and id.type.type)
+  local typ = id.type.type
+
+  if not typ.is_rec then
+    return ParseResult.err({
+      kind = ErrLocKind.SEMANTIC,
+
+      path = self.path,
+      content = self.content,
+      err = ("identifier '%s' type is not a record"):format(token.val),
+
+      s_index = token.s_index,
+      e_index = token.e_index,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
+
+  local expect_res = self:expect(TokenKind.DOT)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local start_token = expect_res:get_ok()
+
+  expect_res = self:expect(TokenKind.IDENTIFIER)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  token = expect_res:get_ok()
+
+  local field_name = token.val
+
+  local found_field: *Node
+  for _, field in ipairs(typ.fields) do
+    if field.name == field_name then
+      found_field = field
+      break
+    end
+  end
+
+  if not found_field then
+    return ParseResult.err({
+      kind = ErrLocKind.SEMANTIC,
+
+      path = self.path,
+      content = self.content,
+      err = ("Unknown field '%s' for type '%s'"):format(field_name, typ.name),
+
+      s_index = token.s_index,
+      e_index = token.e_index,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
+
+  local field_node = new(Node)
+  $field_node = {
+    kind = NodeKind.FIELD,
+
+    s_pos = {
+      line = start_token.s_pos.line,
+      col = start_token.s_pos.col,
+    },
+    e_pos = {
+      line = token.e_pos.line,
+      col = token.e_pos.col,
+    },
+    s_index = start_token.s_index,
+    e_index = token.e_index,
+
+    scope = scope,
+
+    id = id,
+    name = field_name,
+    type = found_field.type
+  }
+
+  return ParseResult.ok(field_node)
+end
+
 Parser.parse_expr = function(self: *Parser, scope: *Node, lhs: *Node): ParseResult
   assert(scope and scope:is_scope())
 
@@ -1412,6 +1540,8 @@ Parser.parse_expr = function(self: *Parser, scope: *Node, lhs: *Node): ParseResu
         in self:parse_proc_call(scope)
       elseif self:peek_next().kind == TokenKind.OPEN_BRACKET then
         in self:parse_id_index(scope)
+      elseif self:peek_next().kind == TokenKind.DOT then
+        in self:parse_id_field(scope)
       end
       in self:parse_id(scope)
     end),
@@ -1630,10 +1760,11 @@ function Parser:parse_array_type(scope: *Node): ParseResult
     scope = scope,
 
     name = array_type_name_sb:promote(),
-    type = builtin_types["type"],
+    type = node,
     val = sub_type,
     len = array_size,
-    is_array = true
+    is_array = true,
+    is_type = true,
   }
   return ParseResult.ok(node)
 end
@@ -1730,40 +1861,106 @@ Parser.parse_type = function(self: *Parser, scope: *Node): ParseResult
   return parse_res
 end
 
-function Parser.compare_types(typ1: *Node, typ2: *Node): Option(ErrLoc)
-  assert(typ1 and (typ1.kind == NodeKind.TYPE or (typ1.kind == NodeKind.ID and typ1.type.kind == NodeKind.TYPE)))
-  assert(typ2 and (typ2.kind == NodeKind.TYPE or (typ2.kind == NodeKind.ID and typ2.type.kind == NodeKind.TYPE)))
+function Parser:check_rec_fields(id: *Node, init_list: *Node): Option(ErrLoc)
+  assert(id and id.kind == NodeKind.ID)
+  assert(id.type.is_rec)
+  assert(init_list and init_list.kind == NodeKind.INIT_LIST)
 
-  local t1: *Node
-  if typ1.kind == NodeKind.TYPE then
-    t1 = typ1
-  else
-   t1 = typ1.type
+  local id_t_fields: hashmap(string, *Node)
+  for _, field in ipairs(id.type.fields) do
+    id_t_fields[field.name] = field
   end
 
-  local t2: *Node
-  if typ2.kind == NodeKind.TYPE then
-    t2 = typ2
-  else
-   t2 = typ2.type
+  for _, field in ipairs(init_list.fields) do
+    local ok, id_field = id_t_fields:has_and_get(field.name)
+    if not ok then
+      return Option.Some(ErrLoc{
+        kind = ErrLocKind.SEMANTIC,
+        path = self.path,
+        content = self.content,
+        s_index = field.s_index,
+        e_index = field.e_index,
+        err = ("field '%s' is not present in record '%s'"):format(field.name, id.name),
+        s_pos = {
+          line = field.s_pos.line,
+          col = field.s_pos.col,
+        },
+        e_pos = {
+          line = field.e_pos.line,
+          col = field.e_pos.col,
+        },
+      })
+    end
+
+    local errloc_opt = self:check_node_type(id_field.type, field.val)
+    if errloc_opt:is_some() then
+      return Option.Some(errloc_opt:get_some())
+    end
   end
 
-  if t1.is_array and t2.is_array then
-    if t1.len >= t2.len and t1.val == t2.val then
+  return Option.None()
+end
+
+Parser.check_node_type = function(self: *Parser, typ: *Node, node: *Node): Option(ErrLoc)
+  assert(typ and (typ.kind == NodeKind.TYPE or (typ.kind == NodeKind.ID and typ.type.kind == NodeKind.TYPE)))
+  assert(node)
+
+  if node.kind == NodeKind.INIT_LIST then
+    if typ.kind == NodeKind.ID and typ.type.is_rec then
+      return self:check_rec_fields(typ, node)
+    else
+      return Option.Some(ErrLoc{
+        kind = ErrLocKind.SEMANTIC,
+
+        path = self.path,
+        content = self.content,
+        err = ("type '%s' cannot be initialized using an initializer list"):format(typ.name),
+
+        s_index = node.s_index,
+        e_index = node.e_index,
+        s_pos = {
+          line = node.s_pos.line,
+          col = node.s_pos.col,
+        },
+        e_pos = {
+          line = node.e_pos.line,
+          col = node.e_pos.col,
+        },
+      })
+    end
+  end
+
+  if typ.is_array and node.type.is_array then
+    if typ.len >= node.type.len and typ.val == node.type.val then
       return Option.None()
     end
-  elseif t1.is_base and t2.is_rec then
-    error("TODO: rec to base type conversion")
-    $t1 = $t2
+  elseif typ.is_type_type and node.type.is_rec then
+    $typ = $node.type
     return Option.None()
   else
-    if t1 == t2 then
+    if typ == node.type then
       return Option.None()
     end
   end
 
-  error("TODO: Type comparison")
-  return
+  return Option.Some(ErrLoc{
+    kind = ErrLocKind.SEMANTIC,
+
+    path = self.path,
+    content = self.content,
+    err = ("Type '%s' does not match type '%s'"):format(node.type.name, typ.name),
+
+    s_index = node.s_index,
+    e_index = node.e_index,
+    s_pos = {
+      line = node.s_pos.line,
+      col = node.s_pos.col,
+    },
+    e_pos = {
+      line = node.e_pos.line,
+      col = node.e_pos.col,
+    },
+  })
 end
 
 local AnnotationResult = @Result(Annotations, ErrLoc)
@@ -1806,60 +2003,6 @@ function Parser:parse_annotations(): AnnotationResult
   token = expect_res:get_ok()
 
   return AnnotationResult.ok(annotations)
-end
-
-function Parser:check_rec_fields(id: *Node, init_list: *Node): Option(ErrLoc)
-  assert(id and id.kind == NodeKind.ID)
-  assert(id.type.is_rec)
-  assert(init_list and init_list.kind == NodeKind.INIT_LIST)
-
-  local id_t_fields: hashmap(string, *Node)
-  for _, field in ipairs(id.type.fields) do
-    id_t_fields[field.name] = field
-  end
-
-  for _, field in ipairs(init_list.fields) do
-    local ok, id_field = id_t_fields:has_and_get(field.name)
-    if not ok then
-      return Option.Some(ErrLoc{
-        kind = ErrLocKind.SEMANTIC,
-        path = self.path,
-        content = self.content,
-        s_index = field.s_index,
-        e_index = field.e_index,
-        err = ("field '%s' is not present in record '%s'"):format(field.name, id.name),
-        s_pos = {
-          line = field.s_pos.line,
-          col = field.s_pos.col,
-        },
-        e_pos = {
-          line = field.e_pos.line,
-          col = field.e_pos.col,
-        },
-      })
-    end
-
-    if not Parser.compare_types(id_field.type, field.val.type) then
-      return Option.Some(ErrLoc{
-        path = self.path,
-        content = self.content,
-        s_index = field.s_index,
-        e_index = field.e_index,
-        err = ("Defined declaration type '%s' does not match value type '%s'"):format(id_field.type.name, field.val.type.name),
-        kind = ErrLocKind.SEMANTIC,
-        s_pos = {
-          line = field.s_pos.line,
-          col = field.s_pos.col,
-        },
-        e_pos = {
-          line = field.e_pos.line,
-          col = field.e_pos.col,
-        },
-      })
-    end
-  end
-
-  return Option.None()
 end
 
 Parser.parse_id_decl = function(self: *Parser, scope: *Node): ParseResult
@@ -1905,7 +2048,7 @@ Parser.parse_id_decl = function(self: *Parser, scope: *Node): ParseResult
     return parse_res
   end
   local decl_type: *Node = parse_res:get_ok()
-  -- print(decl_type.name, decl_type.is_rec)
+  -- print(decl_type.name, decl_type.kind ,decl_type.is_rec)
 
   token = self:peek()
   local annotations: Annotations
@@ -1929,7 +2072,37 @@ Parser.parse_id_decl = function(self: *Parser, scope: *Node): ParseResult
   end
 
   if node then
-    error("TODO: Redo type comparison")
+    if decl_type then
+      local errloc_opt = self:check_node_type(decl_type, node)
+      if errloc_opt:is_some() then
+        return ParseResult.err(errloc_opt:get_some())
+      end
+
+      if decl_type.is_rec and node.kind == NodeKind.TYPE and not annotations.constant then
+        return ParseResult.err({
+          kind = ErrLocKind.SYNTAX,
+
+          path = self.path,
+          content = self.content,
+          err = "Types must be assigned to a constant declaration",
+
+          s_index = start_token.s_index,
+          e_index = node.e_index,
+          s_pos = {
+            line = start_token.s_pos.line,
+            col = start_token.s_pos.col,
+          },
+          e_pos = {
+            line = node.e_pos.line,
+            col = node.e_pos.col,
+          },
+        })
+      end
+    elseif node.kind == NodeKind.INIT_LIST then
+      error("TODO: no decl_type and init_list present")
+    else
+      decl_type = node.type
+    end
   end
 
   token = self:peek_prev()
@@ -1970,12 +2143,13 @@ Parser.parse_proc_call = function(self: *Parser, scope: *Node): ParseResult
   local proc_id_opt = Parser.find_id_up_scope(scope, token.val, token.s_index)
   if proc_id_opt:is_none() and not builtin_procs:has(token.val) then
     return ParseResult.err({
+      kind = ErrLocKind.SYNTAX,
+
       path = self.path,
       content = self.content,
       s_index = token.s_index,
       e_index = token.e_index,
       err = ("Undefined function '%s'"):format(token.val),
-      kind = ErrLocKind.SYNTAX,
       s_pos = {
         line = token.s_pos.line,
         col = token.s_pos.col,

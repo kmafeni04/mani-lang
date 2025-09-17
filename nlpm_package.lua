@@ -31,5 +31,8 @@ return {
       version = "#f751f4bf2ceb44b073e25e3a4cbe0f40757cedd2",
     },
   },
-  scripts = {},
+  scripts = {
+    test = "nelua --cc=tcc test.nelua",
+    dev = "nelua --cc=tcc main.nelua test.mani",
+  },
 }
