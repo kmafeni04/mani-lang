@@ -279,7 +279,6 @@ local NodeKind = @enum{
   PROC_CALL,
   PROC_DEF,
   RETURN,
-  SCOPE,
   TYPE,
   WHILE_LOOP,
   _COUNT
@@ -513,13 +512,26 @@ local builtin_types = map!(string, Np, {
 
 local Parser.builtin_types = builtin_types
 
+function Node:tostring(indent: integer): string
+  range_check!(self.kind, NodeKind)
+
+  local indent_str = string.rep("  ", indent)
+  local sb: stringbuilder
+  sb:write(indent_str, NodeKind_tostring(self.kind), "\n")
+  if self.children then
+    for _, child in ipairs(self.children) do
+      sb:write(child:tostring(indent + 1))
+    end
+  end
+  return sb:promote()
+end
+
 function Node:is_scope(): boolean
   range_check!(self.kind, NodeKind)
 
   switch self.kind do
     case
       NodeKind.AST,
-      NodeKind.SCOPE,
       NodeKind.WHILE_LOOP,
       NodeKind.PROC_DEF
     then
