@@ -548,4 +548,17 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
   return TokenizeResult.ok(tokens)
 end
 
+function tokenizer.tokens_tostring(tokens: sequence(Token)): string
+  local sb: stringbuilder
+  sb:write("[ ")
+  if #tokens > 0 then
+    for _, token in ipairs(tokens) do
+      sb:write(tokenizer.TokenKind_tostring(token.kind), ", ")
+    end
+    sb:rollback(#(", "))
+  end
+  sb:write(" ]")
+  return sb:promote()
+end
+
 return tokenizer
