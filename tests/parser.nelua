@@ -196,6 +196,20 @@ end
 
 do
   local content = [[
+x := nil
+]]
+
+  local new_parser_res = Parser.new("nil_type_decl", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+end
+
+do
+  local content = [[
 while true {
   print("hello world")
   break
