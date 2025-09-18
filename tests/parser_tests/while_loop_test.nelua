@@ -1,0 +1,35 @@
+local Parser = require "...libs.parser"
+local ErrLoc = require "...libs.errloc"
+
+-- NOTE: Passing Tests
+do
+  local content = [[
+while true {
+  print("hello world")
+  break
+}
+]]
+
+  local new_parser_res = Parser.new("while_loop", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+
+  local ast = parser_res:get_ok()
+
+  local expected = [[
+AST
+  WHILE_LOOP -> LITERAL(true)
+    PROC_CALL print(
+      LITERAL("hello world")
+    )
+    BREAK
+]]
+  local res = ast:tostring()
+  assert(expected == res)
+end
+
+-- NOTE: Failing Tests

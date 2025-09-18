@@ -517,7 +517,84 @@ function Node:tostring(indent: integer): string
 
   local indent_str = string.rep("  ", indent)
   local sb: stringbuilder
-  sb:write(indent_str, NodeKind_tostring(self.kind), "\n")
+  if not self.is_type_decl then
+    sb:write(indent_str, NodeKind_tostring(self.kind))
+  end
+  switch self.kind do
+    case NodeKind.AST then
+      sb:write("\n")
+    case NodeKind.ID_DECL then
+      if not self.is_type_decl then
+        sb:write(" -> ", self.name, ": ", self.type.name)
+        if self.val then
+          sb:write(" = ", self.val:tostring())
+        end
+        sb:write("\n")
+      end
+    case NodeKind.LITERAL then
+      sb:write("(")
+      if self.type.is_string then
+        sb:write('"')
+      end
+      sb:write(self.lit_val)
+      if self.type.is_string then
+        sb:write('"')
+      end
+      sb:write(")")
+    case NodeKind.TYPE then
+      sb:write("{\n")
+      for i, field in ipairs(self.fields) do
+        if self.is_anonymous then
+          sb:write(field:tostring(indent + 2))
+        else
+          sb:write(field:tostring(indent + 1))
+        end
+      end
+      local indent_str = indent_str
+      if self.is_anonymous then
+        indent_str = string.rep("  ", indent + 1)
+      end
+      sb:write(indent_str, "}")
+      if not self.is_anonymous then
+        sb:write("\n")
+      end
+    case NodeKind.ID then
+      sb:write(" -> ", self.name, ": ", self.type.name)
+    case NodeKind.PROC_CALL then
+      sb:write(" ", self.name, "(\n")
+      for _, arg in ipairs(self.args) do
+        sb:write(arg:tostring(indent + 1))
+      end
+      sb:write("\n", indent_str ,")\n")
+    case NodeKind.FIELD then
+      sb:write(" -> ", self.id.name ,".", self.name, ": ", self.type.name)
+    case NodeKind.WHILE_LOOP then
+      sb:write(" -> ", self.cond:tostring(), "\n")
+    case NodeKind.BREAK then
+      sb:write("\n")
+    case NodeKind.COMMENT then
+      fallthrough
+    case NodeKind.ARRAY then
+      fallthrough
+    case NodeKind.ASSIGNMENT then
+      fallthrough
+    case NodeKind.BINARY_OP then
+      fallthrough
+    case NodeKind.FOR_LOOP then
+      fallthrough
+    case NodeKind.INDEX then
+      fallthrough
+    case NodeKind.INIT_FIELD then
+      fallthrough
+    case NodeKind.INIT_LIST then
+      fallthrough
+    case NodeKind.PROC_DEF then
+      fallthrough
+    case NodeKind.RETURN then
+      fallthrough
+    else
+      error(("TODO: Node:tostring '%s'"):format(NodeKind_tostring(self.kind)))
+  end
   if self.children then
     for _, child in ipairs(self.children) do
       sb:write(child:tostring(indent + 1))
@@ -2287,7 +2364,7 @@ Parser.parse_id_decl = function(self: *Parser, scope: *Node): ParseResult
     else
       if (node.is_type or (node.kind == NodeKind.ID and node.type.is_type)) and not annotations.constant then
         return ParseResult.err({
-          kind = ErrLocKind.SYNTAX,
+          kind = ErrLocKind.SEMANTIC,
 
           path = self.path,
           content = self.content,

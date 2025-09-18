@@ -1,0 +1,90 @@
+local Parser = require "...libs.parser"
+local ErrLoc = require "...libs.errloc"
+
+-- NOTE: Passing Tests
+do
+  local content = [[
+record X {
+  name: string
+}
+]]
+
+  local new_parser_res = Parser.new("record_type", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+
+  local ast = parser_res:get_ok()
+
+  local expected = [[
+AST
+  TYPE{
+    ID_DECL -> name: string
+  }
+]]
+  local res = ast:tostring()
+  assert(expected == res)
+end
+
+do
+  local content = [[
+record X {
+  name: string
+}
+
+Y : <const> = X
+]]
+
+  local new_parser_res = Parser.new("id_decl_record_type", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+
+  local ast = parser_res:get_ok()
+
+  local expected = [[
+AST
+  TYPE{
+    ID_DECL -> name: string
+  }
+  ID_DECL -> Y: X = ID -> X: X
+]]
+  local res = ast:tostring()
+  assert(expected == res)
+end
+
+do
+  local content = [[
+s := "hello world"
+
+print(s.size)
+]]
+
+  local new_parser_res = Parser.new("rec_field_access", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+
+  local ast = parser_res:get_ok()
+
+  local expected = [[
+AST
+  ID_DECL -> s: string = LITERAL("hello world")
+  PROC_CALL print(
+    FIELD -> s.size: u64
+  )
+]]
+  local res = ast:tostring()
+  assert(expected == res)
+end
+
+-- NOTE: Failing Tests

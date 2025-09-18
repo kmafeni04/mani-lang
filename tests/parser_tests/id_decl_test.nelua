@@ -1,0 +1,241 @@
+local Parser = require "...libs.parser"
+local ErrLoc = require "...libs.errloc"
+
+-- NOTE: Passing Tests
+do
+  local content = "x := 10"
+  local new_parser_res = Parser.new("id_decl_no_type", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+
+  local ast = parser_res:get_ok()
+
+  local expected = [[
+AST
+  ID_DECL -> x: i64 = LITERAL(10)
+]]
+  local res = ast:tostring()
+  assert(expected == res)
+end
+
+do
+  local content = [[
+X : type <const> = record{
+  name: string,
+  age: i64,
+  chars: [5]string
+}]]
+
+  local new_parser_res = Parser.new("id_decl_anon_rec", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+
+  local ast = parser_res:get_ok()
+
+  local expected = [[
+AST
+  ID_DECL -> X: anon_record = TYPE{
+    ID_DECL -> name: string
+    ID_DECL -> age: i64
+    ID_DECL -> chars: [5]string
+  }
+]]
+  local res = ast:tostring()
+  assert(expected == res)
+end
+
+do
+  local content = [[
+X : <const> = record{
+  name: string,
+  age: i64,
+  chars: [5]string
+}]]
+
+  local new_parser_res = Parser.new("id_decl_anon_rec_const_no_type", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+
+  local ast = parser_res:get_ok()
+
+  local expected = [[
+AST
+  ID_DECL -> X: anon_record = TYPE{
+    ID_DECL -> name: string
+    ID_DECL -> age: i64
+    ID_DECL -> chars: [5]string
+  }
+]]
+  local res = ast:tostring()
+  assert(expected == res)
+end
+
+do
+  local content = [[
+X : <const> = record{
+  name: string,
+  age: i64,
+  chars: [5]string
+}
+
+Y : <const> = X
+]]
+
+  local new_parser_res = Parser.new("id_decl_type_id_no_type", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+
+  local ast = parser_res:get_ok()
+
+  local expected = [[
+AST
+  ID_DECL -> X: anon_record = TYPE{
+    ID_DECL -> name: string
+    ID_DECL -> age: i64
+    ID_DECL -> chars: [5]string
+  }
+  ID_DECL -> Y: anon_record = ID -> X: anon_record
+]]
+  local res = ast:tostring()
+  assert(expected == res)
+end
+
+do
+  local content = [[
+x := nil
+]]
+
+  local new_parser_res = Parser.new("nil_type_id_decl", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+
+  local ast = parser_res:get_ok()
+
+  local expected = [[
+AST
+  ID_DECL -> x: niltype = LITERAL(nil)
+]]
+  local res = ast:tostring()
+  assert(expected == res)
+end
+
+
+-- NOTE: Failing Tests
+do
+  local content = "x: string = 10"
+  local new_parser_res = Parser.new("id_decl_wrong_type", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_err())
+
+  local errloc = parser_res:get_err()
+  assert(errloc.err == "Type 'i64' does not match type 'string'")
+  assert(errloc.s_pos.line == 1)
+  assert(errloc.s_pos.col == 13)
+  assert(errloc.e_pos.line == 1)
+  assert(errloc.e_pos.col == 14)
+  assert(errloc.s_index == 13)
+  assert(errloc.e_index == 14)
+  assert(errloc.kind == ErrLoc.ErrLocKind.SEMANTIC)
+end
+
+do
+  local content = "x: i64 = 1.0"
+  local new_parser_res = Parser.new("id_decl_wrong_type", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_err())
+
+  local errloc = parser_res:get_err()
+  assert(errloc.err == "Type 'f64' does not match type 'i64'")
+  assert(errloc.s_pos.line == 1)
+  assert(errloc.s_pos.col == 10)
+  assert(errloc.e_pos.line == 1)
+  assert(errloc.e_pos.col == 12)
+  assert(errloc.s_index == 10)
+  assert(errloc.e_index == 12)
+  assert(errloc.kind == ErrLoc.ErrLocKind.SEMANTIC)
+end
+
+do
+  local content = [[
+X := record{
+  name: string,
+  age: i64,
+  chars: [5]string
+}]]
+
+  local new_parser_res = Parser.new("id_decl_anon_rec_no_const", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_err())
+
+  local errloc = parser_res:get_err()
+  assert(errloc.err == "Types must be assigned to a constant declaration")
+  assert(errloc.s_pos.line == 1)
+  assert(errloc.s_pos.col == 1)
+  assert(errloc.e_pos.line == 5)
+  assert(errloc.e_pos.col == 1)
+  assert(errloc.s_index == 1)
+  assert(errloc.e_index == 61)
+  assert(errloc.kind == ErrLoc.ErrLocKind.SEMANTIC)
+end
+
+do
+  local content = [[
+X : <const> = record{
+  name: string,
+  age: i64,
+  chars: [5]string
+}
+
+Y := X
+]]
+
+  local new_parser_res = Parser.new("id_decl_type_id_no_type_no_const", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_err())
+
+  local errloc = parser_res:get_err()
+  assert(errloc.err == "Types must be assigned to a constant declaration")
+  assert(errloc.s_pos.line == 7)
+  assert(errloc.s_pos.col == 1)
+  assert(errloc.e_pos.line == 7)
+  assert(errloc.e_pos.col == 6)
+  assert(errloc.s_index == 73)
+  assert(errloc.e_index == 78)
+  assert(errloc.kind == ErrLoc.ErrLocKind.SEMANTIC)
+end
