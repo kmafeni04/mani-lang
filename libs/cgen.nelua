@@ -13,17 +13,16 @@ local lang_info = require "..generic.lang_info"
 
 local Cgen = @record{
   scope: *Node,
-  sb_head: stringbuilder,
+  sb_head: *stringbuilder,
   prefix: string
 }
 
 function Cgen.new(scope: *Node, prefix: string): Cgen
   assert(scope and scope:is_scope())
 
-  local sb_head: stringbuilder
-
   local cgen: Cgen = {
     scope = scope,
+    sb_head = new(stringbuilder),
     prefix = prefix
   }
 
@@ -435,12 +434,13 @@ end
 function Cgen:gen_while_loop(node: *Node): string
   assert(node and node.kind == NodeKind.WHILE_LOOP)
 
-  error("Pass node as scope to gen_expr")
-  local cond_val: string = self:gen_expr(node.cond)
+  local while_loop_gen = Cgen.new(node, self.prefix)
+  while_loop_gen.sb_head = self.sb_head
 
-  error("Pass node as scope to gen_scope")
+  local cond_val: string = while_loop_gen:gen_expr(node.cond)
+
   local sb: stringbuilder
-  sb:write("while (", cond_val, ") {\n", self:gen_scope(), "\n}")
+  sb:write("while (", cond_val, ") {\n", while_loop_gen:gen_scope(), "\n}")
   return sb:promote()
 end
 
