@@ -28,12 +28,12 @@ return {
     {
       name = "switch-nelua",
       repo = "https://github.com/kmafeni04/switch-nelua",
-      version = "#f751f4bf2ceb44b073e25e3a4cbe0f40757cedd2",
+      version = "#153961a0277b9f67f4981f614e19be5b821ddb2d",
     },
   },
   scripts = {
     test = "nelua --cc=tcc test.nelua",
     dev = "nelua --cc=tcc main.nelua test.mani",
-    dev_debug = "nelua main.nelua test.mani -d",
+    dev_dbg = "nelua main.nelua test.mani -d",
   },
 }

@@ -617,6 +617,34 @@ local function new_boolean_literal(token: Token, scope: *Node): *Node
   return node
 end
 
+local function new_nil_literal(token: Token, scope: *Node): *Node
+  assert(scope and scope:is_scope())
+
+  local node = new(Node)
+
+  $node = {
+    kind = NodeKind.LITERAL,
+
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    e_pos = {
+      line = token.e_pos.line,
+      col = token.e_pos.col,
+    },
+    s_index = token.s_index,
+    e_index = token.e_index,
+    scope = scope,
+
+    type = builtin_types["niltype"],
+    lit_val = token.val,
+  }
+  assert(builtin_types:has("niltype"))
+
+  return node
+end
+
 local ParseResult = @Result(*Node, ErrLoc)
 
 local Parser.parse_scope: function(self: *Parser, scope: *Node, till: TokenKind): ParseResult
@@ -1624,6 +1652,62 @@ function Parser:parse_id_field(scope: *Node): ParseResult
   return ParseResult.ok(field_node)
 end
 
+function Parser:parse_binop(scope: *Node, lhs: *Node): ParseResult
+  assert(scope and scope:is_scope())
+  assert(lhs)
+
+  local token = self:advance()
+  local res: ParseResult
+  local parse_res = self:parse_expr(scope, lhs)
+  if parse_res:is_err() then
+    return parse_res
+  end
+  local rhs: *Node = parse_res:get_ok()
+
+  if rhs.type ~= "i64" or lhs.type ~= "i64" then
+    return ParseResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = lhs.s_index,
+      e_index = rhs.e_index,
+      err = ("Op '%s' is not possible between types '%s' and '%s'"):format(token.val, lhs.type, rhs.type),
+      kind = ErrLocKind.SEMANTIC,
+      s_pos = {
+        line = lhs.s_pos.line,
+        col = lhs.s_pos.col,
+      },
+      e_pos = {
+        line = rhs.e_pos.line,
+        col = rhs.e_pos.col,
+      },
+    })
+  end
+
+  local node: *Node = new(Node)
+  assert(builtin_types:has("i64"))
+  $node = {
+    kind = NodeKind.BINARY_OP,
+
+    s_pos = {
+      line = lhs.s_pos.line,
+      col = lhs.s_pos.col,
+    },
+    e_pos = {
+      line = rhs.e_pos.line,
+      col = rhs.e_pos.col,
+    },
+    s_index = lhs.s_index,
+    e_index = rhs.e_index,
+    scope = scope,
+
+    type = builtin_types["i64"],
+    lhs = lhs,
+    op = token.val,
+    rhs = rhs,
+  }
+  return ParseResult.ok(node)
+end
+
 Parser.parse_expr = function(self: *Parser, scope: *Node, lhs: *Node): ParseResult
   assert(scope and scope:is_scope())
 
@@ -1667,62 +1751,21 @@ Parser.parse_expr = function(self: *Parser, scope: *Node, lhs: *Node): ParseResu
       self:advance()
       in ParseResult.ok(new_number_literal(token.val, token, scope))
     end),
-    [{ TokenKind.CONSTANT_TRUE, TokenKind.CONSTANT_FALSE }] = (do
+    [TokenKind.CONSTANT_TRUE] = (do
       self:advance()
       in ParseResult.ok(new_boolean_literal(token, scope))
     end),
-    [{ TokenKind.PLUS, TokenKind.MINUS }] = (do
+    [TokenKind.CONSTANT_FALSE] = (do
       self:advance()
-      local res: ParseResult
+      in ParseResult.ok(new_boolean_literal(token, scope))
+    end),
+    [TokenKind.CONSTANT_NIL] = (do
+      self:advance()
+      in ParseResult.ok(new_nil_literal(token, scope))
+    end),
+    [TokenKind.PLUS] = (do
       if lhs then
-        local parse_res = self:parse_expr(scope, lhs)
-        if parse_res:is_err() then
-          in parse_res
-        end
-        local rhs: *Node = parse_res:get_ok()
-
-        if rhs.type ~= "i64" or lhs.type ~= "i64" then
-          in ParseResult.err({
-            path = self.path,
-            content = self.content,
-            s_index = lhs.s_index,
-            e_index = rhs.e_index,
-            err = ("Op '%s' is not possible between types '%s' and '%s'"):format(token.val, lhs.type, rhs.type),
-            kind = ErrLocKind.SEMANTIC,
-            s_pos = {
-              line = lhs.s_pos.line,
-              col = lhs.s_pos.col,
-            },
-            e_pos = {
-              line = rhs.e_pos.line,
-              col = rhs.e_pos.col,
-            },
-          })
-        end
-
-        local node: *Node = new(Node)
-        assert(builtin_types:has("i64"))
-        $node = {
-          kind = NodeKind.BINARY_OP,
-
-          s_pos = {
-            line = lhs.s_pos.line,
-            col = lhs.s_pos.col,
-          },
-          e_pos = {
-            line = rhs.e_pos.line,
-            col = rhs.e_pos.col,
-          },
-          s_index = lhs.s_index,
-          e_index = rhs.e_index,
-          scope = scope,
-
-          type = builtin_types["i64"],
-          lhs = lhs,
-          op = token.val,
-          rhs = rhs,
-        }
-        in ParseResult.ok(node)
+        in self:parse_binop(scope)
       end
       local op: string = token.val
       local expect_res = self:expect(TokenKind.NUMBER)
@@ -1731,9 +1774,18 @@ Parser.parse_expr = function(self: *Parser, scope: *Node, lhs: *Node): ParseResu
       end
       in ParseResult.ok(new_number_literal(op .. token.val, token, scope))
     end),
-    [{ TokenKind.OPEN_ANGLE, TokenKind.CLOSE_ANGLE }] = (do
-      self:advance()
-      local res: ParseResult
+    [TokenKind.MINUS] = (do
+      if lhs then
+        in self:parse_binop(scope)
+      end
+      local op: string = token.val
+      local expect_res = self:expect(TokenKind.NUMBER)
+      if expect_res:is_err() then
+        in ParseResult.err(expect_res:get_err())
+      end
+      in ParseResult.ok(new_number_literal(op .. token.val, token, scope))
+    end),
+    [TokenKind.OPEN_ANGLE] = (do
       if not lhs then
         in ParseResult.err({
           path = self.path,
@@ -1752,54 +1804,28 @@ Parser.parse_expr = function(self: *Parser, scope: *Node, lhs: *Node): ParseResu
           },
         })
       end
-      local parse_res = self:parse_expr(scope, lhs)
-      if parse_res:is_err() then
-        in parse_res
-      end
-      local rhs: *Node = parse_res:get_ok()
-
-      if rhs.type ~= "i64" or lhs.type ~= "i64" then
+      in self:parse_binop(scope, lhs)
+    end),
+    [TokenKind.CLOSE_ANGLE] = (do
+      if not lhs then
         in ParseResult.err({
           path = self.path,
           content = self.content,
-          s_index = lhs.s_index,
-          e_index = rhs.e_index,
-          err = ("Op '%s' is not possible between types '%s' and '%s'"):format(token.val, lhs.type, rhs.type),
+          s_index = token.s_index,
+          e_index = token.e_index,
+          err = ("Op '%s' must be preceded by an expression"):format(token.val),
           kind = ErrLocKind.SEMANTIC,
           s_pos = {
-            line = lhs.s_pos.line,
-            col = lhs.s_pos.col,
+            line = token.s_pos.line,
+            col = token.s_pos.col,
           },
           e_pos = {
-            line = rhs.e_pos.line,
-            col = rhs.e_pos.col,
+            line = token.e_pos.line,
+            col = token.e_pos.col,
           },
         })
       end
-
-      local node: *Node = new(Node)
-      assert(builtin_types:has("i64"))
-      $node = {
-        kind = NodeKind.BINARY_OP,
-
-        s_pos = {
-          line = lhs.s_pos.line,
-          col = lhs.s_pos.col,
-        },
-        e_pos = {
-          line = rhs.e_pos.line,
-          col = rhs.e_pos.col,
-        },
-        s_index = lhs.s_index,
-        e_index = rhs.e_index,
-        scope = scope,
-
-        type = builtin_types["i64"],
-        lhs = lhs,
-        op = token.val,
-        rhs = rhs,
-      }
-      in ParseResult.ok(node)
+      in self:parse_binop(scope, lhs)
     end),
     [TokenKind.KEYWORD_PROC] = self:parse_anon_proc_def(scope),
     [TokenKind.KEYWORD_RECORD] = self:parse_anon_rec_def(scope),
@@ -2165,6 +2191,30 @@ Parser.parse_id_decl = function(self: *Parser, scope: *Node): ParseResult
   end
   local decl_type: *Node = parse_res:get_ok()
 
+  assert(builtin_types:has("void"))
+  if decl_type == builtin_types["void"] then
+    token = self:peek_prev()
+
+    return ParseResult.err({
+      kind = ErrLocKind.SEMANTIC,
+
+      path = self.path,
+      content = self.content,
+      err = "Identifiers can not be declared with type 'void'",
+
+      s_index = start_token.s_index,
+      e_index = token.e_index,
+      s_pos = {
+        line = start_token.s_pos.line,
+        col = start_token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
+
   token = self:peek()
   local annotations: Annotations
   if token.kind == TokenKind.OPEN_ANGLE then
@@ -2184,6 +2234,13 @@ Parser.parse_id_decl = function(self: *Parser, scope: *Node): ParseResult
       return parse_res
     end
     node = parse_res:get_ok()
+
+    assert(builtin_types:has("void"))
+    if node.type == builtin_types["void"] then
+
+      assert(builtin_types:has("void"))
+      node.type = builtin_types["niltype"]
+    end
   end
 
   if node then
@@ -2195,7 +2252,7 @@ Parser.parse_id_decl = function(self: *Parser, scope: *Node): ParseResult
 
       if decl_type.is_type and node.is_type and not annotations.constant then
         return ParseResult.err({
-          kind = ErrLocKind.SYNTAX,
+          kind = ErrLocKind.SEMANTIC,
 
           path = self.path,
           content = self.content,
@@ -2690,16 +2747,16 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
         if parse_res:is_err() then
           in parse_res
         end
-
         ret_value = parse_res:get_ok()
       end
+      local token = self:peek_prev()
 
       _node.e_pos = {
-        line = ret_value.e_pos.line,
-        col = ret_value.e_pos.col,
+        line = token.e_pos.line,
+        col = token.e_pos.col,
       }
       _node.val = ret_value
-      _node.e_index = ret_value.e_index
+      _node.e_index = token.e_index
       $node = _node
       in ParseResult.ok(node)
     end),

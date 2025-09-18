@@ -71,6 +71,7 @@ function Cgen:gen_type(t: *Node): string
 
   local str: string = _switch!(true, {
     [t.is_string] = "String",
+    [t.is_niltype] = "niltype",
     [t.is_i64] = "int64_t",
     [t.is_boolean] = "bool",
     [t.is_void] = "void",
@@ -203,6 +204,10 @@ local function print_arg_snippet(print_arg: string, t: *Node): string
     end),
     [t.is_integral] = (do
       sb:write('fprintf(stdout, "%ld", ', print_arg, ");\n")
+      in nil
+    end),
+    [t.is_niltype] = (do
+      sb:write('fputs("nil", stdout);\n')
       in nil
     end),
     [t.is_float] = (do
@@ -414,11 +419,13 @@ Cgen.gen_expr = function(self: *Cgen, node: *Node): string
       in proc_call_sb:promote()
     end),
     [NodeKind.LITERAL] = (do
-      if node.type == builtin_types["string"] then
+      if node.type.is_string then
         in "(String)" .. Cgen.string(node.lit_val)
-      elseif node.type == builtin_types["i64"] then
+      elseif node.type.is_integral then
         in node.lit_val
-      elseif node.type == builtin_types["boolean"] then
+      elseif node.type.is_boolean then
+        in node.lit_val
+      elseif node.type.is_niltype then
         in node.lit_val
       else
         error(("Unhandled literal node type '%s'"):format(node.type.name))
@@ -509,12 +516,16 @@ function Cgen:gen_id_decl(node: *Node): string
   end
   local name = self.prefix .. "_" .. node.name
   local _: niltype = _switch!(true, {
+    [node.type.is_niltype] = (do
+      sb:write(self:gen_type(node.type), " ", name, " = NIL;\n")
+      in nil
+    end),
     [node.type.is_string] = (do
-      sb:write("String ", name, " = ", final_value, ";\n")
+      sb:write(self:gen_type(node.type), " ", name, " = ", final_value, ";\n")
       in nil
     end),
     [node.type.is_i64] = (do
-      sb:write("int64_t ", name, " = ", final_value, ";\n")
+      sb:write(self:gen_type(node.type), " ", name, " = ", final_value, ";\n")
       in nil
     end),
     [node.type.is_proc] = (do
@@ -664,7 +675,7 @@ typedef struct {} niltype;
     self.sb_head:promote(),
     "\nint main(int argc, char** argv) {\n",
     scope_str,
-    "\n(void)argc;\n(void)(argv);\nreturn 0;\n}"
+    "\n(void)(argc);\n(void)(argv);\nreturn 0;\n}"
   )
 
   return sb_main:promote()
