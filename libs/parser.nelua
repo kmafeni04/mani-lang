@@ -532,6 +532,8 @@ end
 local function new_number_literal(number: string, token: Token, scope: *Node): *Node
   assert(scope and scope:is_scope())
 
+  assert(builtin_types:has("f64"))
+  assert(builtin_types:has("i64"))
   local num_type = tostring(number):match("[%.eE]") and builtin_types["f64"] or builtin_types["i64"]
   local val: string = num_type.name == "i64" and tostring(tointeger(number)) or tostring(tonumber(number))
 
@@ -564,6 +566,7 @@ local function new_string_literal(token: Token, scope: *Node): *Node
 
   local node = new(Node)
 
+  assert(builtin_types:has("string"))
   $node = {
     kind = NodeKind.LITERAL,
 
@@ -609,6 +612,7 @@ local function new_boolean_literal(token: Token, scope: *Node): *Node
     type = builtin_types["boolean"],
     lit_val = token.val,
   }
+  assert(builtin_types:has("boolean"))
 
   return node
 end
@@ -849,16 +853,21 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
     return ParseResult.err(expect_res:get_err())
   end
 
-  expect_res = self:expect(TokenKind.COLON)
-  if expect_res:is_err() then
-    return ParseResult.err(expect_res:get_err())
-  end
+  if self:peek().kind == TokenKind.COLON then
+    expect_res = self:expect(TokenKind.COLON)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
 
-  local parse_res = self:parse_type(scope)
-  if parse_res:is_err() then
-    return parse_res
+    local parse_res = self:parse_type(scope)
+    if parse_res:is_err() then
+      return parse_res
+    end
+    proc_def.ret_t = parse_res:get_ok()
+  else
+    assert(builtin_types:has("void"))
+    proc_def.ret_t = builtin_types["void"]
   end
-  proc_def.ret_t = parse_res:get_ok()
 
   expect_res = self:expect(TokenKind.OPEN_CURLY)
   if expect_res:is_err() then
@@ -1167,6 +1176,7 @@ function Parser:parse_array(scope: *Node): ParseResult
   local array_type = new(Node)
   local array_type_name_sb: stringbuilder
   array_type_name_sb:write("[", #nodes, "]", nodes[1].type.name)
+  assert(builtin_types:has("type"))
   $array_type = {
     kind = NodeKind.TYPE,
     name = array_type_name_sb:promote(),
@@ -1691,6 +1701,7 @@ Parser.parse_expr = function(self: *Parser, scope: *Node, lhs: *Node): ParseResu
         end
 
         local node: *Node = new(Node)
+        assert(builtin_types:has("i64"))
         $node = {
           kind = NodeKind.BINARY_OP,
 
@@ -1767,6 +1778,7 @@ Parser.parse_expr = function(self: *Parser, scope: *Node, lhs: *Node): ParseResu
       end
 
       local node: *Node = new(Node)
+      assert(builtin_types:has("i64"))
       $node = {
         kind = NodeKind.BINARY_OP,
 

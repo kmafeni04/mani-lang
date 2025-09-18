@@ -157,10 +157,13 @@ function Cgen:gen_proc_def(node: *Node)
 
   local name = self.prefix .. "_" .. node.name
 
+  local proc_gen = Cgen.new(node, self.prefix)
+  proc_gen.sb_head = self.sb_head
+
   sb:write("typedef ", ret_t, " (*", name, "_type)(")
   if #node.params > 0 then
     for _, param in ipairs(node.params) do
-      sb:write(self:gen_type(param.type), " ", param.name, ", ")
+      sb:write(proc_gen:gen_type(param.type), " ", param.name, ", ")
     end
     sb:rollback(2)
   end
@@ -168,12 +171,12 @@ function Cgen:gen_proc_def(node: *Node)
   sb:write(ret_t, " ", name, "(")
   if #node.params > 0 then
     for _, param in ipairs(node.params) do
-      sb:write(self:gen_type(param.type), " ", param.name, ", ")
+      sb:write(proc_gen:gen_type(param.type), " ", param.name, ", ")
     end
     sb:rollback(2)
   end
   sb:write(") {\n") -- Cgen.gen_scope runs before the write of "{\n" so it was seperated
-  sb:write(self:gen_scope(), "};\n\n")
+  sb:write(proc_gen:gen_scope(), "};\n\n")
 
   self.sb_head:write(sb:promote())
 
@@ -273,7 +276,8 @@ function Cgen:gen_print(node: *Node): string
 
   if # node.args > 0 then
     for i, arg in ipairs(node.args) do
-      if arg.type.is_type then
+      if arg.kind == NodeKind.ID and arg.type.is_type then
+        assert(builtin_types:has("niltype"))
         sb:write(builtin_types["niltype"].name , " a", i)
       else
         sb:write(self:gen_type(arg.type), " a", i)
@@ -314,7 +318,7 @@ function Cgen:gen_print(node: *Node): string
   print_sb:write(lang_info.LANG_NAME, "_print_", print_funcs_i > 0 and print_funcs_i or #print_funcs, "(")
   if #node.args > 0 then
     for _, arg in ipairs(node.args) do
-      if arg.type.is_type then
+      if arg.kind == NodeKind.ID and arg.type.is_type then
         print_sb:write("NIL")
       else
         print_sb:write(self:gen_expr(arg))
