@@ -1,1 +1,4 @@
 nlpm_packages
+*.c
+*_mani
+*.mani
