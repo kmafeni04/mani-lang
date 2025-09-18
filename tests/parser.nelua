@@ -146,6 +146,40 @@ end
 
 do
   local content = [[
+record X {
+  name: string
+}
+]]
+
+  local new_parser_res = Parser.new("record_type", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+end
+
+do
+  local content = [[
+record X {
+  name: string
+}
+
+Y : <const> = X
+]]
+
+  local new_parser_res = Parser.new("id_decl_record_type", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+end
+
+do
+  local content = [[
 s := "hello world"
 
 print(s.size)

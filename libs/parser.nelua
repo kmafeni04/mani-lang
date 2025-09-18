@@ -355,11 +355,15 @@ Node = @record{
   is_float: boolean,
   is_string: boolean,
   is_array: boolean,
-  is_rec: boolean,
   is_void: boolean,
   is_pointer: boolean,
   is_proc: boolean,
+  is_niltype: boolean,
   is_type_type: boolean,
+
+  is_type_decl: boolean,
+
+  is_rec: boolean,
   is_type: boolean,
 
   is_i64: boolean,
@@ -467,6 +471,15 @@ local string_type: Node = {
 }
 string_type.type = &string_type
 
+local niltype_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "niltype",
+  is_builtin = true,
+  is_niltype = true,
+  is_type = true
+}
+niltype_type.type = &niltype_type
+
 local boolean_type: Node = {
   kind = NodeKind.TYPE,
   name = "boolean",
@@ -495,6 +508,7 @@ local builtin_types = map!(string, Np, {
   [string_type.name] = &string_type,
   [boolean_type.name] = &boolean_type,
   [void_type.name] = &void_type,
+  [niltype_type.name] = &niltype_type,
 })
 
 local Parser.builtin_types = builtin_types
@@ -943,6 +957,96 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
   proc_def.content = self.content:sub(proc_def.s_index, proc_def.e_index)
 
   return ParseResult.ok(proc_def)
+end
+
+function Parser:parse_rec_def(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.KEYWORD_RECORD)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local start_token = expect_res:get_ok()
+
+  expect_res = self:expect(TokenKind.IDENTIFIER)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local rec_name = expect_res:get_ok().val
+
+  expect_res = self:expect(TokenKind.OPEN_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  local fields: sequence(*Node)
+  while self:peek().kind ~= TokenKind.CLOSE_CURLY do
+    local parse_res = self:parse_id_decl(scope)
+    if parse_res:is_err() then
+      return parse_res
+    end
+    fields:push(parse_res:get_ok())
+
+    expect_res = self:advance_comma_until(TokenKind.CLOSE_CURLY)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
+  end
+
+  expect_res = self:expect(TokenKind.CLOSE_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local token = expect_res:get_ok()
+
+  local rec_node = new(Node)
+  $rec_node = {
+    kind = NodeKind.TYPE,
+    s_pos = {
+      line = start_token.s_pos.line,
+      col = start_token.s_pos.col,
+    },
+    e_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    s_index = start_token.s_index,
+    e_index = token.s_index,
+    scope = scope,
+
+    name = rec_name,
+    fields = fields,
+    is_rec = true,
+    is_type = true,
+    type = rec_node,
+  }
+
+  local rec_id_decl = new(Node)
+
+  $rec_id_decl = {
+    kind = NodeKind.ID_DECL,
+    s_pos = {
+      line = rec_node.s_pos.line,
+      col = rec_node.s_pos.col,
+    },
+    e_pos = {
+      line = rec_node.e_pos.line,
+      col = rec_node.e_pos.col,
+    },
+    s_index = rec_node.s_index,
+    e_index = rec_node.e_index,
+
+    name = rec_node.name,
+    val = rec_node,
+    type = rec_node.type,
+    annotations = { constant = true },
+    is_type_decl = true,
+    scope = scope,
+  }
+
+  scope.children:push(rec_id_decl)
+
+  return ParseResult.ok(rec_node)
 end
 
 function Parser:parse_anon_rec_def(scope: *Node): ParseResult
@@ -2588,6 +2692,7 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
       in ParseResult.ok(node)
     end),
     [TokenKind.KEYWORD_PROC] = self:parse_proc_def(scope),
+    [TokenKind.KEYWORD_RECORD] = self:parse_rec_def(scope),
     _default = (do
       error(("Unexpected Token: %s('%s')"):format(TokenKind_tostring(token.kind), token.val))
       in ParseResult.err({})

@@ -34,5 +34,6 @@ return {
   scripts = {
     test = "nelua --cc=tcc test.nelua",
     dev = "nelua --cc=tcc main.nelua test.mani",
+    dev_debug = "nelua main.nelua test.mani -d",
   },
 }

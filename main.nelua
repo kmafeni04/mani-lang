@@ -6,7 +6,7 @@ require "io"
 local AnsiColor = require 'ansicolor-nelua.ansicolor'
 
 local Parser = require ".libs.parser"
-local cgen = require ".libs.cgen"
+local Cgen = require ".libs.cgen"
 local lang_info = require ".generic.lang_info"
 
 -- BUILD SECTION --
@@ -87,7 +87,9 @@ else
   file_name = file_name_seq[1]
 end
 
-local c_code = cgen.final(ast, file_name)
+local cgen = Cgen.new(ast, file_name)
+
+local c_code = cgen:final()
 
 -- print(c_code)
 

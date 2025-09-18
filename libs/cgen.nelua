@@ -82,7 +82,7 @@ function Cgen:gen_type(t: *Node): string
       if t.is_anonymous then
         in "anon_rec_" .. anon_rec_count
       end
-      in t.name
+      in self.prefix .. "_" .. t.name
     end),
     _default = (do
       error(("Unhandled type '%s'"):format(t.name))
@@ -116,6 +116,8 @@ function Cgen:gen_anon_proc_def(node: *Node)
       sb:write(self:gen_type(param.type), " ", param.name, ", ")
     end
     sb:rollback(2)
+  else
+    sb:write("void")
   end
   sb:write(");\n\n")
   sb:write(ret_t, " anon_func_", anon_func_count, "(")
@@ -271,9 +273,13 @@ function Cgen:gen_print(node: *Node): string
 
   if # node.args > 0 then
     for i, arg in ipairs(node.args) do
-      sb:write(self:gen_type(arg.type), " a", i)
-      if arg.type.is_array then
-        sb:write(" [", arg.type.len, "] ")
+      if arg.type.is_type then
+        sb:write(builtin_types["niltype"].name , " a", i)
+      else
+        sb:write(self:gen_type(arg.type), " a", i)
+        if arg.type.is_array then
+          sb:write(" [", arg.type.len, "] ")
+        end
       end
       sb:write(", ")
       print_args_sb:write(arg.type, ", ")
@@ -308,7 +314,11 @@ function Cgen:gen_print(node: *Node): string
   print_sb:write(lang_info.LANG_NAME, "_print_", print_funcs_i > 0 and print_funcs_i or #print_funcs, "(")
   if #node.args > 0 then
     for _, arg in ipairs(node.args) do
-      print_sb:write(self:gen_expr(arg))
+      if arg.type.is_type then
+        print_sb:write("NIL")
+      else
+        print_sb:write(self:gen_expr(arg))
+      end
       print_sb:write(", ")
     end
     print_sb:rollback(2)
@@ -353,7 +363,7 @@ function Cgen:gen_anon_rec_def(node: *Node)
   anon_rec_count = anon_rec_count + 1
   local sb: stringbuilder
 
-  sb:write("typedef struct{\n")
+  sb:write("typedef struct {\n")
   for _, field in ipairs(node.fields) do
     sb:write(self:gen_type(field.type), " ", field.name)
     if field.type.is_array then
@@ -362,6 +372,25 @@ function Cgen:gen_anon_rec_def(node: *Node)
     sb:write(";\n")
   end
   sb:write("} anon_rec_", anon_rec_count, ";\n")
+
+  self.sb_head:write(sb:promote())
+end
+
+function Cgen:gen_rec_def(node: *Node)
+  assert(node.kind == NodeKind.TYPE)
+
+  anon_rec_count = anon_rec_count + 1
+  local sb: stringbuilder
+
+  sb:write("typedef struct {\n")
+  for _, field in ipairs(node.fields) do
+    sb:write(self:gen_type(field.type), " ", field.name)
+    if field.type.is_array then
+      sb:write("[", field.type.len, "]")
+    end
+    sb:write(";\n")
+  end
+  sb:write("} ", self.prefix, "_" , node.name , ";\n\n")
 
   self.sb_head:write(sb:promote())
 end
@@ -497,8 +526,8 @@ function Cgen:gen_id_decl(node: *Node): string
     [node.type.is_rec] = (do
       if node.type.is_anonymous then
         sb:write("typedef anon_rec_", anon_rec_count, " ", name, ";\n")
-      else
-        error()
+      elseif not node.is_type_decl then
+        sb:write("typedef ", self.prefix , "_", node.type.name, " ", name, ";\n")
       end
       in nil
     end),
@@ -549,6 +578,14 @@ Cgen.gen_scope = function(self: *Cgen): string
         assign_sb:write(child.id.name, " = ", self:gen_expr(child.val), ";\n")
         in assign_sb:promote()
       end),
+      [NodeKind.TYPE] = (do
+        if child.is_rec then
+          self:gen_rec_def(child)
+        else
+          error()
+        end
+        in ""
+      end),
       _default = (do
         error(("Unexpected child node kind: '%s'"):format(NodeKind_tostring(child.kind)))
         in ""
@@ -560,16 +597,53 @@ Cgen.gen_scope = function(self: *Cgen): string
   return sb:promote()
 end
 
-function Cgen.final(scope: *Node, file_name: string): string
-  assert(scope and scope:is_scope())
-
+function Cgen:final(): string
   local sb_main: stringbuilder
 
-  local cgen = Cgen.new(scope, file_name)
-
-  local scope_str = cgen:gen_scope()
+  local scope_str = self:gen_scope()
   sb_main:write(
     [[
+/* Disable some warnings that the generated code can trigger. */
+#if defined(__clang__) && __clang_major__ >= 3
+  #pragma clang diagnostic ignored "-Wtype-limits"
+  #pragma clang diagnostic ignored "-Wwrite-strings"
+  #pragma clang diagnostic ignored "-Wunused"
+  #pragma clang diagnostic ignored "-Wunused-parameter"
+  #pragma clang diagnostic ignored "-Wmissing-field-initializers"
+  #pragma clang diagnostic ignored "-Wparentheses-equality"
+  #pragma clang diagnostic ignored "-Wtautological-compare"
+  #pragma clang diagnostic ignored "-Wmissing-braces"
+  #ifndef __cplusplus
+    #pragma clang diagnostic ignored "-Wincompatible-pointer-types"
+    #pragma clang diagnostic error   "-Wimplicit-function-declaration"
+    #pragma clang diagnostic error   "-Wimplicit-int"
+  #else
+    #pragma clang diagnostic ignored "-Wnarrowing"
+    #pragma clang diagnostic ignored "-Wc99-designator"
+  #endif
+#elif defined(__GNUC__) && __GNUC__ >= 5
+  #pragma GCC diagnostic ignored "-Wtype-limits"
+  #pragma GCC diagnostic ignored "-Wwrite-strings"
+  #pragma GCC diagnostic ignored "-Wunused-parameter"
+  #pragma GCC diagnostic ignored "-Wunused-value"
+  #pragma GCC diagnostic ignored "-Wunused-variable"
+  #pragma GCC diagnostic ignored "-Wunused-function"
+  #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+  #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+  #ifndef __cplusplus
+    #pragma GCC diagnostic ignored "-Wmissing-braces"
+    #pragma GCC diagnostic ignored "-Wincompatible-pointer-types"
+    #pragma GCC diagnostic ignored "-Wdiscarded-qualifiers"
+    #pragma GCC diagnostic error   "-Wimplicit-function-declaration"
+    #pragma GCC diagnostic error   "-Wimplicit-int"
+  #else
+    #pragma GCC diagnostic ignored "-Wnarrowing"
+  #endif
+#endif
+#if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
+  #define _CRT_SECURE_NO_WARNINGS
+#endif
+
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -577,8 +651,13 @@ function Cgen.final(scope: *Node, file_name: string): string
 typedef struct {
   char* data;
   uint64_t size;
-} String;]],
-    cgen.sb_head:promote(),
+} String;
+
+typedef struct {} niltype;
+#define NIL (niltype){}
+
+]],
+    self.sb_head:promote(),
     "\nint main(int argc, char** argv) {\n",
     scope_str,
     "\n(void)argc;\n(void)(argv);\nreturn 0;\n}"
