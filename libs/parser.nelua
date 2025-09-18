@@ -2048,7 +2048,6 @@ Parser.parse_id_decl = function(self: *Parser, scope: *Node): ParseResult
     return parse_res
   end
   local decl_type: *Node = parse_res:get_ok()
-  -- print(decl_type.name, decl_type.kind ,decl_type.is_rec)
 
   token = self:peek()
   local annotations: Annotations
@@ -2078,7 +2077,7 @@ Parser.parse_id_decl = function(self: *Parser, scope: *Node): ParseResult
         return ParseResult.err(errloc_opt:get_some())
       end
 
-      if decl_type.is_rec and node.kind == NodeKind.TYPE and not annotations.constant then
+      if decl_type.is_type and node.is_type and not annotations.constant then
         return ParseResult.err({
           kind = ErrLocKind.SYNTAX,
 
@@ -2100,27 +2099,27 @@ Parser.parse_id_decl = function(self: *Parser, scope: *Node): ParseResult
       end
     elseif node.kind == NodeKind.INIT_LIST then
       error("TODO: no decl_type and init_list present")
-    elseif not decl_type and node.kind == NodeKind.TYPE and not annotations.constant then
-      return ParseResult.err({
-        kind = ErrLocKind.SYNTAX,
-
-        path = self.path,
-        content = self.content,
-        err = "Types must be assigned to a constant declaration",
-
-        s_index = start_token.s_index,
-        e_index = node.e_index,
-        s_pos = {
-          line = start_token.s_pos.line,
-          col = start_token.s_pos.col,
-        },
-        e_pos = {
-          line = node.e_pos.line,
-          col = node.e_pos.col,
-        },
-      })
-      decl_type = node.type
     else
+      if (node.is_type or (node.kind == NodeKind.ID and node.type.is_type)) and not annotations.constant then
+        return ParseResult.err({
+          kind = ErrLocKind.SYNTAX,
+
+          path = self.path,
+          content = self.content,
+          err = "Types must be assigned to a constant declaration",
+
+          s_index = start_token.s_index,
+          e_index = node.e_index,
+          s_pos = {
+            line = start_token.s_pos.line,
+            col = start_token.s_pos.col,
+          },
+          e_pos = {
+            line = node.e_pos.line,
+            col = node.e_pos.col,
+          },
+        })
+      end
       decl_type = node.type
     end
   end
