@@ -78,6 +78,12 @@ function Cgen:gen_type(t: *Node): string
     [t.is_u8] = "uint8_t",
     [t.is_array] = self:gen_type(t.val),
     [t.kind == NodeKind.ID] = self.prefix .. "_" .. t.name,
+    [t.is_rec] = (do
+      if t.is_anonymous then
+        in "anon_rec_" .. anon_rec_count
+      end
+      in t.name
+    end),
     _default = (do
       error(("Unhandled type '%s'"):format(t.name))
       in ""
@@ -235,6 +241,15 @@ local function print_arg_snippet(print_arg: string, t: *Node): string
         sb:write('fputs(", ", stdout);\n')
       end
       sb:write('fputs("}", stdout);\n')
+      in nil
+    end),
+    [t.is_rec] = (do
+      sb:write('fputs("', t.name, "{ ")
+      for i = 1, #t.fields do
+        local field = t.fields[i]
+        sb:write(field.name, ": ", field.type.name, ", ")
+      end
+      sb:write('}", stdout);\n')
       in nil
     end),
     _default = (do
