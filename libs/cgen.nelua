@@ -1,5 +1,6 @@
 require "map-nelua.map"
 
+local tokenizer = require ".tokenizer"
 local Parser = require ".parser"
 local Node = Parser.Node
 local NodeKind = Parser.NodeKind
@@ -40,29 +41,31 @@ function Cgen.string(s: string): string
   return ('{ "%s", %d }'):format(s, #s)
 end
 
-function Cgen.binary_op(node: *Node): string
+function Cgen:gen_binary_op(node: *Node): string
   assert(node and node.kind == NodeKind.BINARY_OP)
   local sb: stringbuilder
 
 
   local lhs_value: string = _switch!(node.lhs.kind, {
-    [NodeKind.ID] = node.lhs.name,
+    [NodeKind.ID] = self.prefix .. "_" .. node.lhs.name,
     [NodeKind.LITERAL] = node.lhs.type == "string" and "(String)" .. Cgen.string(node.lhs.lit_val) or node.lhs.lit_val,
+    [NodeKind.BINARY_OP] = self:gen_binary_op(node.lhs),
     _default = (do
       error(("Unhandled lhs kind '%s'"):format(NodeKind_tostring(node.lhs.kind)))
       in ""
     end)
   })
   local rhs_value: string = _switch!(node.rhs.kind, {
-    [NodeKind.ID] = node.rhs.name,
+    [NodeKind.ID] = self.prefix .. "_" .. node.rhs.name,
     [NodeKind.LITERAL] = node.rhs.type == "string" and "(String)" .. Cgen.string(node.rhs.lit_val) or node.rhs.lit_val,
+    [NodeKind.BINARY_OP] = self:gen_binary_op(node.rhs),
     _default = (do
       error(("Unhandled rhs kind '%s'"):format(NodeKind_tostring(node.rhs.kind)))
       in ""
     end)
   })
 
-  sb:write(lhs_value, " ", node.op, " ", rhs_value)
+  sb:write(lhs_value, " ", tokenizer.TokenKind_tostring(node.op), " ", rhs_value)
   return sb:promote()
 end
 
@@ -281,7 +284,7 @@ function Cgen:gen_print(node: *Node): string
 
   if # node.args > 0 then
     for i, arg in ipairs(node.args) do
-      if arg.kind == NodeKind.ID and arg.type.is_type then
+      if arg.is_type then
         assert(builtin_types:has("niltype"))
         sb:write(builtin_types["niltype"].name , " a", i)
       else
@@ -323,7 +326,7 @@ function Cgen:gen_print(node: *Node): string
   print_sb:write(lang_info.LANG_NAME, "_print_", print_funcs_i > 0 and print_funcs_i or #print_funcs, "(")
   if #node.args > 0 then
     for _, arg in ipairs(node.args) do
-      if arg.kind == NodeKind.ID and arg.type.is_type then
+      if arg.is_type then
         print_sb:write("NIL")
       else
         print_sb:write(self:gen_expr(arg))
@@ -432,7 +435,7 @@ Cgen.gen_expr = function(self: *Cgen, node: *Node): string
       end
       in ""
     end),
-    [NodeKind.BINARY_OP] = Cgen.binary_op(node),
+    [NodeKind.BINARY_OP] = self:gen_binary_op(node),
     [NodeKind.PROC_DEF] = (do
       if node.type.is_anonymous then
         self:gen_anon_proc_def(node)
@@ -590,7 +593,7 @@ Cgen.gen_scope = function(self: *Cgen): string
       end),
       [NodeKind.ASSIGNMENT] = (do
         local assign_sb: stringbuilder
-        assign_sb:write(child.id.name, " = ", self:gen_expr(child.val), ";\n")
+        assign_sb:write(self.prefix .. "_" .. child.id.name, " = ", self:gen_expr(child.val), ";\n")
         in assign_sb:promote()
       end),
       [NodeKind.TYPE] = (do

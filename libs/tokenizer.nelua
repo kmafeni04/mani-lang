@@ -61,11 +61,72 @@ local tokenizer.Token = Token
 
 function tokenizer.TokenKind_tostring(kind: TokenKind): string
   range_check!(kind, TokenKind)
-  ## for _, field in ipairs(TokenKind.value.fields) do
-    if #[field.value]# == kind then
-      return #[field.name]#
-    end
-  ## end
+  switch kind do
+    case TokenKind.CLOSE_ANGLE then
+      return ">"
+    case TokenKind.CLOSE_BRACKET then
+      return "]"
+    case TokenKind.CLOSE_CURLY then
+      return "}"
+    case TokenKind.CLOSE_PAREN then
+      return ")"
+    case TokenKind.COLON then
+      return ":"
+    case TokenKind.COMMA then
+      return ","
+    case TokenKind.COMMENT then
+      return "COMMENT"
+    case TokenKind.CONSTANT_FALSE then
+      return "false"
+    case TokenKind.CONSTANT_NIL then
+      return "nil"
+    case TokenKind.CONSTANT_TRUE then
+      return "true"
+    case TokenKind.DOT then
+      return "."
+    case TokenKind.EOF then
+      return "EOF"
+    case TokenKind.EQUALS then
+      return "="
+    case TokenKind.IDENTIFIER then
+      return "IDENTIFIER"
+    case TokenKind.KEYWORD_BREAK then
+      return "break"
+    case TokenKind.KEYWORD_FOR then
+      return "for"
+    case TokenKind.KEYWORD_PROC then
+      return "proc"
+    case TokenKind.KEYWORD_RECORD then
+      return "record"
+    case TokenKind.KEYWORD_RETURN then
+      return "return"
+    case TokenKind.KEYWORD_WHILE then
+      return "while"
+    case TokenKind.MINUS then
+      return "-"
+    case TokenKind.NUMBER then
+      return "NUMBER"
+    case TokenKind.OPEN_ANGLE then
+      return "<"
+    case TokenKind.OPEN_BRACKET then
+      return "["
+    case TokenKind.OPEN_CURLY then
+      return "{"
+    case TokenKind.OPEN_PAREN then
+      return "("
+    case TokenKind.PLUS then
+      return "+"
+    case TokenKind.STAR then
+      return "*"
+    case TokenKind.STRING then
+      return "STRING"
+    else
+      ## for _, field in ipairs(TokenKind.value.fields) do
+        if #[field.value]# == kind then
+          error(("Unhandled TokenKind '%s'"):format(#[field.name]#))
+        end
+      ## end
+  end
   error("UNREACHABLE")
   return ""
 end

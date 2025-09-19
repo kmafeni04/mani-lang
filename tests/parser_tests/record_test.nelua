@@ -21,8 +21,11 @@ record X {
 
   local expected = [[
 AST
-  TYPE{
-    ID_DECL -> name: string
+  TYPE X{
+    ID_DECL -> name: TYPE string{
+      ID_DECL -> data: TYPE *[0]u8
+      ID_DECL -> size: TYPE u64
+    }
   }
 ]]
   local res = ast:tostring()
@@ -50,10 +53,23 @@ Y : <const> = X
 
   local expected = [[
 AST
-  TYPE{
-    ID_DECL -> name: string
+  TYPE X{
+    ID_DECL -> name: TYPE string{
+      ID_DECL -> data: TYPE *[0]u8
+      ID_DECL -> size: TYPE u64
+    }
   }
-  ID_DECL -> Y: X = ID -> X: X
+  ID_DECL -> Y: TYPE X{
+    ID_DECL -> name: TYPE string{
+      ID_DECL -> data: TYPE *[0]u8
+      ID_DECL -> size: TYPE u64
+    }
+  } = ID -> X: TYPE X{
+      ID_DECL -> name: TYPE string{
+        ID_DECL -> data: TYPE *[0]u8
+        ID_DECL -> size: TYPE u64
+      }
+    }
 ]]
   local res = ast:tostring()
   assert(expected == res)
@@ -78,9 +94,12 @@ print(s.size)
 
   local expected = [[
 AST
-  ID_DECL -> s: string = LITERAL("hello world")
+  ID_DECL -> s: TYPE string{
+    ID_DECL -> data: TYPE *[0]u8
+    ID_DECL -> size: TYPE u64
+  } = LITERAL("hello world")
   PROC_CALL print(
-    FIELD -> s.size: u64
+    FIELD -> s.size: TYPE u64
   )
 ]]
   local res = ast:tostring()

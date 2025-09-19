@@ -16,7 +16,7 @@ do
 
   local expected = [[
 AST
-  ID_DECL -> x: i64 = LITERAL(10)
+  ID_DECL -> x: TYPE i64 = LITERAL(10)
 ]]
   local res = ast:tostring()
   assert(expected == res)
@@ -42,10 +42,20 @@ X : type <const> = record{
 
   local expected = [[
 AST
-  ID_DECL -> X: anon_record = TYPE{
-    ID_DECL -> name: string
-    ID_DECL -> age: i64
-    ID_DECL -> chars: [5]string
+  ID_DECL -> X: TYPE anon_record{
+    ID_DECL -> name: TYPE string{
+      ID_DECL -> data: TYPE *[0]u8
+      ID_DECL -> size: TYPE u64
+    }
+    ID_DECL -> age: TYPE i64
+    ID_DECL -> chars: TYPE [5]string
+  } = TYPE anon_record{
+    ID_DECL -> name: TYPE string{
+      ID_DECL -> data: TYPE *[0]u8
+      ID_DECL -> size: TYPE u64
+    }
+    ID_DECL -> age: TYPE i64
+    ID_DECL -> chars: TYPE [5]string
   }
 ]]
   local res = ast:tostring()
@@ -72,10 +82,20 @@ X : <const> = record{
 
   local expected = [[
 AST
-  ID_DECL -> X: anon_record = TYPE{
-    ID_DECL -> name: string
-    ID_DECL -> age: i64
-    ID_DECL -> chars: [5]string
+  ID_DECL -> X: TYPE anon_record{
+    ID_DECL -> name: TYPE string{
+      ID_DECL -> data: TYPE *[0]u8
+      ID_DECL -> size: TYPE u64
+    }
+    ID_DECL -> age: TYPE i64
+    ID_DECL -> chars: TYPE [5]string
+  } = TYPE anon_record{
+    ID_DECL -> name: TYPE string{
+      ID_DECL -> data: TYPE *[0]u8
+      ID_DECL -> size: TYPE u64
+    }
+    ID_DECL -> age: TYPE i64
+    ID_DECL -> chars: TYPE [5]string
   }
 ]]
   local res = ast:tostring()
@@ -105,12 +125,36 @@ Y : <const> = X
 
   local expected = [[
 AST
-  ID_DECL -> X: anon_record = TYPE{
-    ID_DECL -> name: string
-    ID_DECL -> age: i64
-    ID_DECL -> chars: [5]string
+  ID_DECL -> X: TYPE anon_record{
+    ID_DECL -> name: TYPE string{
+      ID_DECL -> data: TYPE *[0]u8
+      ID_DECL -> size: TYPE u64
+    }
+    ID_DECL -> age: TYPE i64
+    ID_DECL -> chars: TYPE [5]string
+  } = TYPE anon_record{
+    ID_DECL -> name: TYPE string{
+      ID_DECL -> data: TYPE *[0]u8
+      ID_DECL -> size: TYPE u64
+    }
+    ID_DECL -> age: TYPE i64
+    ID_DECL -> chars: TYPE [5]string
   }
-  ID_DECL -> Y: anon_record = ID -> X: anon_record
+  ID_DECL -> Y: TYPE anon_record{
+    ID_DECL -> name: TYPE string{
+      ID_DECL -> data: TYPE *[0]u8
+      ID_DECL -> size: TYPE u64
+    }
+    ID_DECL -> age: TYPE i64
+    ID_DECL -> chars: TYPE [5]string
+  } = ID -> X: TYPE anon_record{
+      ID_DECL -> name: TYPE string{
+        ID_DECL -> data: TYPE *[0]u8
+        ID_DECL -> size: TYPE u64
+      }
+      ID_DECL -> age: TYPE i64
+      ID_DECL -> chars: TYPE [5]string
+    }
 ]]
   local res = ast:tostring()
   assert(expected == res)
@@ -133,13 +177,35 @@ x := nil
 
   local expected = [[
 AST
-  ID_DECL -> x: niltype = LITERAL(nil)
+  ID_DECL -> x: TYPE niltype = LITERAL(nil)
 ]]
   local res = ast:tostring()
   assert(expected == res)
 end
 
 
+do
+  local content = [[
+i := 1 + 1 * 3
+]]
+
+  local new_parser_res = Parser.new("nil_type_id_decl", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+
+  local ast = parser_res:get_ok()
+
+  local expected = [[
+AST
+  ID_DECL -> i: TYPE i64 = BINARY_OP -> LITERAL(1) OP(+) BINARY_OP -> LITERAL(1) OP(*) LITERAL(3)
+]]
+  local res = ast:tostring()
+  assert(expected == res)
+end
 -- NOTE: Failing Tests
 do
   local content = "x: string = 10"
