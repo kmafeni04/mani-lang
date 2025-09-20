@@ -1,6 +1,5 @@
 require "map-nelua.map"
 
-local tokenizer = require ".tokenizer"
 local Parser = require ".parser"
 local Node = Parser.Node
 local NodeKind = Parser.NodeKind
@@ -42,14 +41,14 @@ function Cgen.string(s: string): string
 end
 
 function Cgen:gen_binary_op(node: *Node): string
-  assert(node and node.kind == NodeKind.BINARY_OP)
+  assert(node and node.kind == NodeKind.BIN_OP)
   local sb: stringbuilder
 
 
   local lhs_value: string = _switch!(node.lhs.kind, {
     [NodeKind.ID] = self.prefix .. "_" .. node.lhs.name,
     [NodeKind.LITERAL] = node.lhs.type == "string" and "(String)" .. Cgen.string(node.lhs.lit_val) or node.lhs.lit_val,
-    [NodeKind.BINARY_OP] = self:gen_binary_op(node.lhs),
+    [NodeKind.BIN_OP] = self:gen_binary_op(node.lhs),
     _default = (do
       error(("Unhandled lhs kind '%s'"):format(NodeKind_tostring(node.lhs.kind)))
       in ""
@@ -58,14 +57,14 @@ function Cgen:gen_binary_op(node: *Node): string
   local rhs_value: string = _switch!(node.rhs.kind, {
     [NodeKind.ID] = self.prefix .. "_" .. node.rhs.name,
     [NodeKind.LITERAL] = node.rhs.type == "string" and "(String)" .. Cgen.string(node.rhs.lit_val) or node.rhs.lit_val,
-    [NodeKind.BINARY_OP] = self:gen_binary_op(node.rhs),
+    [NodeKind.BIN_OP] = self:gen_binary_op(node.rhs),
     _default = (do
       error(("Unhandled rhs kind '%s'"):format(NodeKind_tostring(node.rhs.kind)))
       in ""
     end)
   })
 
-  sb:write(lhs_value, " ", tokenizer.TokenKind_tostring(node.op), " ", rhs_value)
+  sb:write(lhs_value, " ", node.op.val, " ", rhs_value)
   return sb:promote()
 end
 
@@ -435,7 +434,7 @@ Cgen.gen_expr = function(self: *Cgen, node: *Node): string
       end
       in ""
     end),
-    [NodeKind.BINARY_OP] = self:gen_binary_op(node),
+    [NodeKind.BIN_OP] = self:gen_binary_op(node),
     [NodeKind.PROC_DEF] = (do
       if node.type.is_anonymous then
         self:gen_anon_proc_def(node)
@@ -531,6 +530,10 @@ function Cgen:gen_id_decl(node: *Node): string
       sb:write(self:gen_type(node.type), " ", name, " = ", final_value, ";\n")
       in nil
     end),
+    [node.type.is_boolean] = (do
+      sb:write(self:gen_type(node.type), " ", name, " = ", final_value, ";\n")
+      in nil
+    end),
     [node.type.is_proc] = (do
       if node.type.is_anonymous then
         sb:write("anon_func_", anon_func_count, "_type ", name, " = anon_func_", anon_func_count, ";\n")
@@ -576,10 +579,10 @@ Cgen.gen_scope = function(self: *Cgen): string
       [NodeKind.BREAK] = "break;\n",
       [NodeKind.ID_DECL] = (do
         local id_decl: string = self:gen_id_decl(child)
-        if self.scope.kind == NodeKind.AST and child.val and child.val.kind ~= NodeKind.PROC_CALL then
-          self.sb_head:write(id_decl)
-          in ""
-        end
+        -- if self.scope.kind == NodeKind.AST and child.val and child.val.kind ~= NodeKind.PROC_CALL then
+        --   self.sb_head:write(id_decl)
+        --   in ""
+        -- end
         in id_decl
       end),
       [NodeKind.RETURN] = (do

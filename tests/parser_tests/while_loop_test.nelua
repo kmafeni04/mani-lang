@@ -55,11 +55,11 @@ while i < 10 {
   local expected = [[
 AST
   ID_DECL -> i: TYPE i64 = LITERAL(1)
-  WHILE_LOOP -> BINARY_OP -> ID -> i: TYPE i64 OP(<) LITERAL(10)
+  WHILE_LOOP -> BIN_OP(ID -> i: TYPE i64 OP(<) LITERAL(10))
     PROC_CALL print(
       LITERAL("hello")
     )
-    ASSIGNMENT -> ID -> i: TYPE i64: TYPE i64 = BINARY_OP -> ID -> i: TYPE i64 OP(+) LITERAL(1)
+    ASSIGNMENT -> ID -> i: TYPE i64: TYPE i64 = BIN_OP(ID -> i: TYPE i64 OP(+) LITERAL(1))
 ]]
   local res = ast:tostring()
   assert(expected == res)

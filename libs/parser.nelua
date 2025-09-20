@@ -254,7 +254,7 @@ local NodeKind = @enum{
   ARRAY,
   ASSIGNMENT,
   AST,
-  BINARY_OP,
+  BIN_OP,
   BREAK,
   COMMENT,
   FIELD,
@@ -318,7 +318,7 @@ Node = @record{
 
   -- BinOp
   lhs: *Node,
-  op: TokenKind,
+  op: Token,
   rhs: *Node,
 
   -- WhileLoop
@@ -335,7 +335,7 @@ Node = @record{
 
   -- Record
   fields: sequence(*Node),
-  -- binary_ops: hashmap(TokenKind, BinOpFn),
+  -- bin_ops: hashmap(TokenKind, BinOpFn),
   is_builtin: boolean,
   is_boolean: boolean,
   is_scalar: boolean,
@@ -505,15 +505,47 @@ local Parser.builtin_types = builtin_types
 local BinOpInfo = @record{
   prec: integer,
   op: TokenKind,
-  type: *Node
+  type: *Node,
+  lht: *Node,
+  rht: *Node,
 }
 
-local binary_ops = map!(TokenKind, BinOpInfo, {
-  [TokenKind.OPEN_ANGLE] = { prec = 1, op = TokenKind.OPEN_ANGLE, type = builtin_types[boolean_type.name]},
-  [TokenKind.CLOSE_ANGLE] = { prec = 1, op = TokenKind.CLOSE_ANGLE, type = builtin_types[boolean_type.name]},
-  [TokenKind.PLUS] = { prec = 2, op = TokenKind.PLUS, type = builtin_types[i64_type.name]},
-  [TokenKind.MINUS] = { prec = 2, op = TokenKind.MINUS, type = builtin_types[i64_type.name]},
-  [TokenKind.STAR] = { prec = 3, op = TokenKind.STAR, type = builtin_types[i64_type.name]},
+local bin_ops = map!(TokenKind, BinOpInfo, {
+  [TokenKind.OPEN_ANGLE] = {
+    prec = 1,
+    op = TokenKind.OPEN_ANGLE,
+    type = builtin_types[boolean_type.name],
+    lht = builtin_types[i64_type.name],
+    rht = builtin_types[i64_type.name],
+  },
+  [TokenKind.CLOSE_ANGLE] = {
+    prec = 1,
+    op = TokenKind.CLOSE_ANGLE,
+    type = builtin_types[boolean_type.name],
+    lht = builtin_types[i64_type.name],
+    rht = builtin_types[i64_type.name],
+  },
+  [TokenKind.PLUS] = {
+    prec = 2,
+    op = TokenKind.PLUS,
+    type = builtin_types[i64_type.name],
+    lht = builtin_types[i64_type.name],
+    rht = builtin_types[i64_type.name],
+  },
+  [TokenKind.MINUS] = {
+    prec = 2,
+    op = TokenKind.MINUS,
+    type = builtin_types[i64_type.name],
+    lht = builtin_types[i64_type.name],
+    rht = builtin_types[i64_type.name],
+  },
+  [TokenKind.STAR] = {
+    prec = 3,
+    op = TokenKind.STAR,
+    type = builtin_types[i64_type.name],
+    lht = builtin_types[i64_type.name],
+    rht = builtin_types[i64_type.name],
+  },
 })
 
 local builtin_procs = map!(string, string, {
@@ -597,14 +629,15 @@ function Node:tostring(indent: integer, inline: boolean): string
       sb:write(" -> ", self.cond:tostring(indent + 1, true), "\n")
     case NodeKind.BREAK then
       sb:write("\n")
-    case NodeKind.BINARY_OP then
+    case NodeKind.BIN_OP then
       sb:write(
-        " -> ",
+        "(",
         self.lhs:tostring(indent + 1, true),
         " OP(",
-        TokenKind_tostring(self.op),
+        self.op.val,
         ") ",
-        self.rhs:tostring(indent + 1, true)
+        self.rhs:tostring(indent + 1, true),
+        ")"
       )
     case NodeKind.ASSIGNMENT then
       sb:write(
@@ -780,6 +813,13 @@ local Parser.parse_proc_call: function(self: *Parser, scope: *Node): ParseResult
 local Parser.parse_type: function(self: *Parser, scope: *Node): ParseResult
 local Parser.parse_expr: function(self: *Parser, scope: *Node, lhs: *Node): ParseResult
 local Parser.check_node_type: function(self: *Parser, typ: *Node, node: *Node): Option(ErrLoc)
+
+--[[
+  NOTE: This exists here so that it can be cleared everywhere deemed necessary
+  This is more of a hack as I do not know how to internalize this structure into the
+  Parser:parse_bin_op function
+]]
+local bin_op_nodes: sequence(*Node)
 
 function Parser.find_id_up_scope(scope: *Node, name: string, s_index: integer): Option(*Node)
   assert(scope and scope:is_scope())
@@ -1285,6 +1325,7 @@ function Parser:parse_array(scope: *Node): ParseResult
   local nodes: sequence(*Node)
   while self:peek().kind ~= TokenKind.CLOSE_BRACKET do
     local parse_res = self:parse_expr(scope)
+    bin_op_nodes:clear()
     if parse_res:is_err() then
       return parse_res
     end
@@ -1440,6 +1481,7 @@ function Parser:parse_id_index(scope: *Node): ParseResult
   end
 
   local parse_res = self:parse_expr(scope)
+  bin_op_nodes:clear()
   if parse_res:is_err() then
     return parse_res
   end
@@ -1609,6 +1651,7 @@ function Parser:parse_init_list(scope: *Node): ParseResult
     end
 
     local parse_res = self:parse_expr(scope)
+    bin_op_nodes:clear()
     if parse_res:is_err() then
       return parse_res
     end
@@ -1775,63 +1818,48 @@ function Parser:parse_id_field(scope: *Node): ParseResult
   return ParseResult.ok(field_node)
 end
 
-function Parser:parse_binop(scope: *Node, lhs: *Node): ParseResult
-  assert(scope and scope:is_scope())
-  assert(lhs)
+function Parser:check_bin_op_types(node: *Node): Option(ErrLoc)
+  assert(node and node.kind == NodeKind.BIN_OP)
+  -- TODO: Create actual error messages for each bin op
 
-  local token = self:advance()
-  local has, bin_op_info = binary_ops:has_and_get(token.kind)
-  if not has then
-    return ParseResult.err({
-      kind = ErrLocKind.SYNTAX,
-
-      path = self.path,
-      content = self.content,
-      err = ("Unexpected token '%s'"):format(token.val),
-
-      s_index = token.s_index,
-      e_index = token.e_index,
-      s_pos = {
-        line = token.s_pos.line,
-        col = token.s_pos.col,
-      },
-      e_pos = {
-        line = token.e_pos.line,
-        col = token.e_pos.col,
-      },
-    })
+  local node_bin_op_info = bin_ops[node.op.kind]
+  local err_loc_opt = self:check_node_type(node_bin_op_info.lht, node.lhs)
+  if err_loc_opt:is_some() then
+    return Option.Some(err_loc_opt:get_some())
   end
 
-  local res: ParseResult
-  local parse_res = self:parse_expr(scope, lhs)
+  local err_loc_opt = self:check_node_type(node_bin_op_info.rht, node.rhs)
+  if err_loc_opt:is_some() then
+    return Option.Some(err_loc_opt:get_some())
+  end
+
+  return Option.None()
+end
+
+function Parser:parse_bin_op(scope: *Node, lhs: *Node, op: Token): ParseResult
+  assert(scope and scope:is_scope())
+  assert(lhs)
+  range_check!(op.kind, TokenKind)
+
+  local has, bin_op_info = bin_ops:has_and_get(op.kind)
+  assert(has)
+
+  local parse_res = self:parse_expr(scope)
   if parse_res:is_err() then
     return parse_res
   end
-  local rhs: *Node = parse_res:get_ok()
+  local rhs = parse_res:get_ok()
 
-  local next_token = self:peek_next()
-
-  local has, next_bin_op_info = binary_ops:has_and_get(next_token.kind)
-  if has then
-    if next_bin_op_info.prec > bin_op_info.prec then
-      local old_rhs = rhs
-      local parse_res = self:parse_binop(scope, old_rhs)
-      if parse_res:is_err() then
-        return parse_res
-      end
-      rhs = parse_res:get_ok()
+  if rhs.kind == NodeKind.BIN_OP then
+    local err_loc_opt = self:check_bin_op_types(rhs)
+    if err_loc_opt:is_some() then
+      return ParseResult.err(err_loc_opt:get_some())
     end
-  end
-
-  local errloc_opt = self:check_node_type(lhs.type, rhs)
-
-  if errloc_opt:is_some() then
-    return ParseResult.err(errloc_opt:get_some())
   end
 
   local binary_op_node: *Node = new(Node)
   $binary_op_node = {
-    kind = NodeKind.BINARY_OP,
+    kind = NodeKind.BIN_OP,
 
     s_pos = {
       line = lhs.s_pos.line,
@@ -1847,9 +1875,10 @@ function Parser:parse_binop(scope: *Node, lhs: *Node): ParseResult
 
     type = bin_op_info.type,
     lhs = lhs,
-    op = bin_op_info.op,
+    op = op,
     rhs = rhs,
   }
+
   return ParseResult.ok(binary_op_node)
 end
 
@@ -1868,9 +1897,8 @@ Parser.parse_expr = function(self: *Parser, scope: *Node, lhs: *Node): ParseResu
     TokenKind.PLUS,
     TokenKind.MINUS,
     TokenKind.STAR,
-    TokenKind.OPEN_BRACKET,
     TokenKind.OPEN_ANGLE,
-    TokenKind.CLOSE_ANGLE,
+    TokenKind.OPEN_BRACKET,
     TokenKind.OPEN_CURLY,
   }, ("Expected an expression but got '%s'"):format(TokenKind_tostring(self:peek().kind)))
   if expect_res:is_err() then
@@ -1886,13 +1914,6 @@ Parser.parse_expr = function(self: *Parser, scope: *Node, lhs: *Node): ParseResu
         in self:parse_id_index(scope)
       elseif self:peek_next().kind == TokenKind.DOT then
         in self:parse_id_field(scope)
-      elseif binary_ops:has(self:peek_next().kind) then
-        local parse_res = self:parse_id(scope)
-        if parse_res:is_err() then
-          in parse_res
-        end
-        local id_node = parse_res:get_ok()
-        in self:parse_expr(scope, id_node)
       end
       in self:parse_id(scope)
     end),
@@ -1917,19 +1938,9 @@ Parser.parse_expr = function(self: *Parser, scope: *Node, lhs: *Node): ParseResu
       in ParseResult.ok(new_nil_literal(token, scope))
     end),
     [TokenKind.PLUS] = (do
+      self:advance()
       if lhs then
-        in self:parse_binop(scope, lhs)
-      end
-      local op: string = token.val
-      local expect_res = self:expect(TokenKind.NUMBER)
-      if expect_res:is_err() then
-        in ParseResult.err(expect_res:get_err())
-      end
-      in ParseResult.ok(new_number_literal(op .. token.val, token, scope))
-    end),
-    [TokenKind.MINUS] = (do
-      if lhs then
-        in self:parse_binop(scope, lhs)
+        in self:parse_bin_op(scope, lhs, token)
       end
       local op: string = token.val
       local expect_res = self:expect(TokenKind.NUMBER)
@@ -1939,67 +1950,28 @@ Parser.parse_expr = function(self: *Parser, scope: *Node, lhs: *Node): ParseResu
       in ParseResult.ok(new_number_literal(op .. token.val, token, scope))
     end),
     [TokenKind.STAR] = (do
+      self:advance()
       if not lhs then
-        in ParseResult.err({
-          path = self.path,
-          content = self.content,
-          s_index = token.s_index,
-          e_index = token.e_index,
-          err = ("Op '%s' must be preceded by an expression"):format(token.val),
-          kind = ErrLocKind.SEMANTIC,
-          s_pos = {
-            line = token.s_pos.line,
-            col = token.s_pos.col,
-          },
-          e_pos = {
-            line = token.e_pos.line,
-            col = token.e_pos.col,
-          },
-        })
+        error("No lhs")
+        in ParseResult.err({})
       end
-      in self:parse_binop(scope, lhs)
+      in self:parse_bin_op(scope, lhs, token)
     end),
     [TokenKind.OPEN_ANGLE] = (do
+      self:advance()
       if not lhs then
-        in ParseResult.err({
-          path = self.path,
-          content = self.content,
-          s_index = token.s_index,
-          e_index = token.e_index,
-          err = ("Op '%s' must be preceded by an expression"):format(token.val),
-          kind = ErrLocKind.SEMANTIC,
-          s_pos = {
-            line = token.s_pos.line,
-            col = token.s_pos.col,
-          },
-          e_pos = {
-            line = token.e_pos.line,
-            col = token.e_pos.col,
-          },
-        })
+        error("No lhs")
+        in ParseResult.err({})
       end
-      in self:parse_binop(scope, lhs)
+      in self:parse_bin_op(scope, lhs, token)
     end),
-    [TokenKind.CLOSE_ANGLE] = (do
-      if not lhs then
-        in ParseResult.err({
-          path = self.path,
-          content = self.content,
-          s_index = token.s_index,
-          e_index = token.e_index,
-          err = ("Op '%s' must be preceded by an expression"):format(token.val),
-          kind = ErrLocKind.SEMANTIC,
-          s_pos = {
-            line = token.s_pos.line,
-            col = token.s_pos.col,
-          },
-          e_pos = {
-            line = token.e_pos.line,
-            col = token.e_pos.col,
-          },
-        })
+    [TokenKind.MINUS] = (do
+      local op: string = token.val
+      local expect_res = self:expect(TokenKind.NUMBER)
+      if expect_res:is_err() then
+        in ParseResult.err(expect_res:get_err())
       end
-      in self:parse_binop(scope, lhs)
+      in ParseResult.ok(new_number_literal(op .. token.val, token, scope))
     end),
     [TokenKind.KEYWORD_PROC] = self:parse_anon_proc_def(scope),
     [TokenKind.KEYWORD_RECORD] = self:parse_anon_rec_def(scope),
@@ -2010,21 +1982,96 @@ Parser.parse_expr = function(self: *Parser, scope: *Node, lhs: *Node): ParseResu
       in ParseResult.err({})
     end),
   })
+
   if parse_res:is_err() then
     return parse_res
   end
 
   local node = parse_res:get_ok()
 
-  token = self:peek()
-  if binary_ops:has(token.kind) then
-    parse_res = self:parse_expr(scope, node)
-    if parse_res:is_err() then
-      return parse_res
+  if node.kind == NodeKind.BIN_OP then
+    bin_op_nodes:push(node)
+  end
+
+  if #bin_op_nodes > 1 then
+    local bottom_node = bin_op_nodes[#bin_op_nodes - 1]
+
+    assert(bin_ops:has(bottom_node.op.kind))
+    local bottom_node_bin_op_info = bin_ops[bottom_node.op.kind]
+
+    local top_node = bin_op_nodes[#bin_op_nodes]
+
+    -- print(bottom_node:tostring())
+    -- print(top_node:tostring())
+
+    -- assert(bin_ops:has(top_node.op.kind))
+    local top_node_bin_op_info = bin_ops[top_node.op.kind]
+
+    if top_node_bin_op_info.prec > bottom_node_bin_op_info.prec then
+      local old_lhs = bottom_node.lhs
+      local old_op = bottom_node.op
+      local old_rhs = bottom_node.rhs
+      local old_type = bottom_node.type
+
+      top_node.rhs = old_lhs
+      top_node.e_pos = {
+        line = old_lhs.e_pos.line,
+        col = old_lhs.e_pos.col,
+      }
+      top_node.e_index = old_rhs.e_index
+
+      local new_bin_op_node: *Node = new(Node)
+      $new_bin_op_node = {
+        kind = NodeKind.BIN_OP,
+
+        s_pos = {
+          line = top_node.s_pos.line,
+          col = top_node.s_pos.col,
+        },
+        e_pos = {
+          line = old_rhs.e_pos.line,
+          col = old_rhs.e_pos.col,
+        },
+        s_index = top_node.s_index,
+        e_index = old_rhs.e_index,
+        scope = scope,
+
+        type = old_type,
+        lhs = top_node,
+        op = old_op,
+        rhs = old_rhs,
+      }
+      bin_op_nodes:pop()
+      bin_op_nodes:pop()
+      bin_op_nodes:push(new_bin_op_node)
+
+      return ParseResult.ok(new_bin_op_node)
+    else
+      bin_op_nodes:pop()
+      bin_op_nodes:pop()
     end
   end
 
-  return parse_res
+  if #bin_op_nodes == 0 and node.kind == NodeKind.BIN_OP then
+    if node.kind == NodeKind.BIN_OP then
+      local err_loc_opt = self:check_bin_op_types(node)
+      if err_loc_opt:is_some() then
+        return ParseResult.err(err_loc_opt:get_some())
+      end
+    end
+  end
+
+  token = self:peek()
+  if bin_ops:has(token.kind) then
+    return self:parse_expr(scope, node)
+  elseif node.kind == NodeKind.BIN_OP then
+    local err_loc_opt = self:check_bin_op_types(node)
+    if err_loc_opt:is_some() then
+      return ParseResult.err(err_loc_opt:get_some())
+    end
+  end
+
+  return ParseResult.ok(node)
 end
 
 function Parser:parse_array_type(scope: *Node): ParseResult
@@ -2209,9 +2256,9 @@ function Parser:check_rec_fields(id: *Node, init_list: *Node): Option(ErrLoc)
       })
     end
 
-    local errloc_opt = self:check_node_type(id_field.type, field.val)
-    if errloc_opt:is_some() then
-      return Option.Some(errloc_opt:get_some())
+    local err_loc_opt = self:check_node_type(id_field.type, field.val)
+    if err_loc_opt:is_some() then
+      return Option.Some(err_loc_opt:get_some())
     end
   end
 
@@ -2405,6 +2452,7 @@ Parser.parse_id_decl = function(self: *Parser, scope: *Node): ParseResult
   if token.kind == TokenKind.EQUALS then
     self:advance()
     local parse_res = self:parse_expr(scope)
+    bin_op_nodes:clear()
     if parse_res:is_err() then
       return parse_res
     end
@@ -2420,9 +2468,9 @@ Parser.parse_id_decl = function(self: *Parser, scope: *Node): ParseResult
 
   if node then
     if decl_type then
-      local errloc_opt = self:check_node_type(decl_type, node)
-      if errloc_opt:is_some() then
-        return ParseResult.err(errloc_opt:get_some())
+      local err_loc_opt = self:check_node_type(decl_type, node)
+      if err_loc_opt:is_some() then
+        return ParseResult.err(err_loc_opt:get_some())
       end
 
       if decl_type.is_type and node.is_type and not annotations.constant then
@@ -2583,6 +2631,7 @@ Parser.parse_proc_call = function(self: *Parser, scope: *Node): ParseResult
 
   while self:peek().kind ~= TokenKind.CLOSE_PAREN do
     local parse_res: ParseResult = self:parse_expr(scope)
+    bin_op_nodes:clear()
     if parse_res:is_err() then
       return parse_res
     end
@@ -2678,6 +2727,7 @@ function Parser:parse_while_loop(scope: *Node): ParseResult
   }
 
   local parse_res = self:parse_expr(scope)
+  bin_op_nodes:clear()
   if parse_res:is_err() then
     return parse_res
   end
@@ -2773,6 +2823,7 @@ function Parser:parse_assignment(scope: *Node): ParseResult
   end
 
   local parse_res = self:parse_expr(scope)
+  bin_op_nodes:clear()
   if parse_res:is_err() then
     return parse_res
   end
@@ -2919,6 +2970,7 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
       local ret_value: *Node
       if self:peek().kind ~= TokenKind.CLOSE_CURLY then
         local parse_res = self:parse_expr(scope)
+        bin_op_nodes:clear()
         if parse_res:is_err() then
           in parse_res
         end
@@ -2938,7 +2990,7 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
     [TokenKind.KEYWORD_PROC] = self:parse_proc_def(scope),
     [TokenKind.KEYWORD_RECORD] = self:parse_rec_def(scope),
     _default = (do
-      error(("Unexpected Token: %s('%s')"):format(TokenKind_tostring(token.kind), token.val))
+      error(("Unexpected Token: '%s'"):format(TokenKind_tostring(token.kind)))
       in ParseResult.err({})
     end),
   })

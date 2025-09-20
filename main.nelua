@@ -86,6 +86,8 @@ else
   file_name = file_name_seq[1]
 end
 
+-- print(ast:tostring())
+
 local cgen = Cgen.new(ast, file_name)
 
 local c_code = cgen:final()

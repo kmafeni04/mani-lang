@@ -201,7 +201,7 @@ i := 1 + 1 * 3
 
   local expected = [[
 AST
-  ID_DECL -> i: TYPE i64 = BINARY_OP -> LITERAL(1) OP(+) BINARY_OP -> LITERAL(1) OP(*) LITERAL(3)
+  ID_DECL -> i: TYPE i64 = BIN_OP(LITERAL(1) OP(+) BIN_OP(LITERAL(1) OP(*) LITERAL(3)))
 ]]
   local res = ast:tostring()
   assert(expected == res)
