@@ -25,6 +25,10 @@ local TokenKind = @enum{
   CONSTANT_TRUE,
   DOT,
   EOF,
+  EQUATES,
+  LT_EQS,
+  GT_EQS,
+  NOT_EQS,
   EQUALS,
   IDENTIFIER,
   KEYWORD_BREAK,
@@ -34,7 +38,8 @@ local TokenKind = @enum{
   KEYWORD_RETURN,
   KEYWORD_WHILE,
   MINUS,
-  NUMBER,
+  INTEGER,
+  FLOAT,
   OPEN_ANGLE,
   OPEN_BRACKET,
   OPEN_CURLY,
@@ -61,6 +66,7 @@ local tokenizer.Token = Token
 
 function tokenizer.TokenKind_tostring(kind: TokenKind): string
   range_check!(kind, TokenKind)
+
   switch kind do
     case TokenKind.CLOSE_ANGLE then
       return ">"
@@ -86,6 +92,14 @@ function tokenizer.TokenKind_tostring(kind: TokenKind): string
       return "."
     case TokenKind.EOF then
       return "EOF"
+    case TokenKind.GT_EQS then
+      return ">="
+    case TokenKind.LT_EQS then
+      return "<="
+    case TokenKind.NOT_EQS then
+      return "!="
+    case TokenKind.EQUATES then
+      return "=="
     case TokenKind.EQUALS then
       return "="
     case TokenKind.IDENTIFIER then
@@ -104,8 +118,10 @@ function tokenizer.TokenKind_tostring(kind: TokenKind): string
       return "while"
     case TokenKind.MINUS then
       return "-"
-    case TokenKind.NUMBER then
-      return "NUMBER"
+    case TokenKind.INTEGER then
+      return "INTEGER"
+    case TokenKind.FLOAT then
+      return "FLOAT"
     case TokenKind.OPEN_ANGLE then
       return "<"
     case TokenKind.OPEN_BRACKET then
@@ -263,37 +279,75 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         e_index = index,
       })
     elseif current_char == "<" then
-      local line, col = pos_to_line_col(index, content)
-      tokens:push({
-        kind = TokenKind.OPEN_ANGLE,
-        val = current_char,
-        s_pos = {
-          line = line,
-          col = col,
-        },
-        e_pos = {
-          line = line,
-          col = col,
-        },
-        s_index = index,
-        e_index = index,
-      })
+      local s_line, s_col = pos_to_line_col(index, content)
+      local e_line, e_col = pos_to_line_col(index + 1, content)
+      if next_char == "=" then
+        tokens:push({
+          kind = TokenKind.LT_EQS,
+          val = current_char .. next_char,
+          s_pos = {
+            line = s_line,
+            col = s_col,
+          },
+          e_pos = {
+            line = e_line,
+            col = e_col,
+          },
+          s_index = index,
+          e_index = index + 1,
+        })
+        index = index + 1
+      else
+        tokens:push({
+          kind = TokenKind.OPEN_ANGLE,
+          val = current_char,
+          s_pos = {
+            line = s_line,
+            col = s_col,
+          },
+          e_pos = {
+            line = s_line,
+            col = s_col,
+          },
+          s_index = index,
+          e_index = index,
+        })
+      end
     elseif current_char == ">" then
-      local line, col = pos_to_line_col(index, content)
-      tokens:push({
-        kind = TokenKind.CLOSE_ANGLE,
-        val = current_char,
-        s_pos = {
-          line = line,
-          col = col,
-        },
-        e_pos = {
-          line = line,
-          col = col,
-        },
-        s_index = index,
-        e_index = index,
-      })
+      local s_line, s_col = pos_to_line_col(index, content)
+      local e_line, e_col = pos_to_line_col(index + 1, content)
+      if next_char == "=" then
+        tokens:push({
+          kind = TokenKind.GT_EQS,
+          val = current_char .. next_char,
+          s_pos = {
+            line = s_line,
+            col = s_col,
+          },
+          e_pos = {
+            line = e_line,
+            col = e_col,
+          },
+          s_index = index,
+          e_index = index + 1,
+        })
+        index = index + 1
+      else
+        tokens:push({
+          kind = TokenKind.CLOSE_ANGLE,
+          val = current_char,
+            s_pos = {
+              line = s_line,
+              col = s_col,
+            },
+            e_pos = {
+              line = s_line,
+              col = s_col,
+            },
+          s_index = index,
+          e_index = index,
+        })
+      end
     elseif current_char == "{" then
       local line, col = pos_to_line_col(index, content)
       tokens:push({
@@ -445,22 +499,59 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         s_index = start,
         e_index = index,
       })
-    elseif current_char == "=" then
-      local line, char = pos_to_line_col(index, content)
+    elseif current_char == "!" and next_char == "=" then
+      local s_line, s_col = pos_to_line_col(index, content)
+      local e_line, e_col = pos_to_line_col(index + 1, content)
       tokens:push({
-        kind = TokenKind.EQUALS,
-        val = current_char,
+        kind = TokenKind.NOT_EQS,
+        val = current_char .. next_char,
         s_pos = {
-          line = line,
-          col = char,
+          line = s_line,
+          col = s_col,
         },
         e_pos = {
-          line = line,
-          col = char,
+          line = e_line,
+          col = e_col,
         },
         s_index = index,
-        e_index = index,
+        e_index = index + 1,
       })
+      index = index + 1
+    elseif current_char == "=" then
+      local s_line, s_col = pos_to_line_col(index, content)
+      local e_line, e_col = pos_to_line_col(index + 1, content)
+      if next_char == "=" then
+        tokens:push({
+          kind = TokenKind.EQUATES,
+          val = current_char .. next_char,
+          s_pos = {
+            line = s_line,
+            col = s_col,
+          },
+          e_pos = {
+            line = e_line,
+            col = e_col,
+          },
+          s_index = index,
+          e_index = index + 1,
+        })
+        index = index + 1
+      else
+        tokens:push({
+          kind = TokenKind.EQUALS,
+          val = current_char,
+          s_pos = {
+            line = s_line,
+            col = s_col,
+          },
+          e_pos = {
+            line = s_line,
+            col = s_col,
+          },
+          s_index = index,
+          e_index = index,
+        })
+      end
     elseif current_char:match("[%d]") then
       local start = index
       local val = current_char
@@ -522,8 +613,9 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
       else
         local s_pos_line, s_pos_col = pos_to_line_col(start, content)
         local e_pos_line, e_pos_col = pos_to_line_col(index, content)
+        local kind = (decimal or exponent) and TokenKind.FLOAT or TokenKind.INTEGER
         tokens:push({
-          kind = TokenKind.NUMBER,
+          kind = kind,
           val = val,
           s_pos = {
             line = s_pos_line,

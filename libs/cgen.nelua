@@ -1,6 +1,12 @@
 require "map-nelua.map"
 
 local Parser = require ".parser"
+
+local tokenizer = require ".tokenizer"
+local Token = tokenizer.Token
+local TokenKind = tokenizer.TokenKind
+local TokenKind_tostring = tokenizer.TokenKind_tostring
+
 local Node = Parser.Node
 local NodeKind = Parser.NodeKind
 local NodeKind_tostring = Parser.NodeKind_tostring
@@ -13,15 +19,18 @@ local lang_info = require "..generic.lang_info"
 
 local Cgen = @record{
   scope: *Node,
+  parser: *Parser,
   sb_head: *stringbuilder,
   prefix: string
 }
 
-function Cgen.new(scope: *Node, prefix: string): Cgen
+function Cgen.new(scope: *Node, parser: *Parser, prefix: string): Cgen
   assert(scope and scope:is_scope())
+  assert(parser)
 
   local cgen: Cgen = {
     scope = scope,
+    parser = parser,
     sb_head = new(stringbuilder),
     prefix = prefix
   }
@@ -35,48 +44,51 @@ local Cgen.gen_expr: function(self: *Cgen, node: *Node): string
 local print_funcs: sequence(string)
 local anon_func_count = 0
 local anon_rec_count = 0
+local string_eq_func_used: boolean
+local string_eq_func = ([[
+bool %s_eq_string(%s_string a, %s_string b) {
+  return a.size == b.size && (a.data == b.data || a.size == 0 || memcmp(a.data, b.data, a.size) == 0);
+}
+]]):format(lang_info.LANG_NAME, lang_info.LANG_NAME, lang_info.LANG_NAME)
 
 function Cgen.string(s: string): string
   return ('{ "%s", %d }'):format(s, #s)
 end
 
-function Cgen:gen_binary_op(node: *Node): string
-  assert(node and node.kind == NodeKind.BIN_OP)
+function Cgen:gen_bin_expr(node: *Node): string
+  assert(node and node.kind == NodeKind.BIN_EXPR)
   local sb: stringbuilder
 
+  local lhs_value: string = self:gen_expr(node.lhs)
+  local rhs_value: string = self:gen_expr(node.rhs)
 
-  local lhs_value: string = _switch!(node.lhs.kind, {
-    [NodeKind.ID] = self.prefix .. "_" .. node.lhs.name,
-    [NodeKind.LITERAL] = node.lhs.type == "string" and "(String)" .. Cgen.string(node.lhs.lit_val) or node.lhs.lit_val,
-    [NodeKind.BIN_OP] = self:gen_binary_op(node.lhs),
-    _default = (do
-      error(("Unhandled lhs kind '%s'"):format(NodeKind_tostring(node.lhs.kind)))
-      in ""
-    end)
-  })
-  local rhs_value: string = _switch!(node.rhs.kind, {
-    [NodeKind.ID] = self.prefix .. "_" .. node.rhs.name,
-    [NodeKind.LITERAL] = node.rhs.type == "string" and "(String)" .. Cgen.string(node.rhs.lit_val) or node.rhs.lit_val,
-    [NodeKind.BIN_OP] = self:gen_binary_op(node.rhs),
-    _default = (do
-      error(("Unhandled rhs kind '%s'"):format(NodeKind_tostring(node.rhs.kind)))
-      in ""
-    end)
-  })
-
-  sb:write(lhs_value, " ", node.op.val, " ", rhs_value)
+  assert(builtin_types["string"])
+  if node.op.kind == TokenKind.EQUATES then
+    if self.parser:check_node_type(node.lhs.type, node.rhs):is_some() then
+      sb:write("false")
+    elseif node.lhs.type == builtin_types["string"] and node.rhs.type == builtin_types["string"] then
+      if not string_eq_func_used then
+        self.sb_head:write(string_eq_func)
+        string_eq_func_used = true
+      end
+      sb:write("mani_eq_string(", lhs_value, ", ", rhs_value, ")")
+    else
+      sb:write(lhs_value, " ", node.op.val, " ", rhs_value)
+    end
+  else
+    sb:write(lhs_value, " ", node.op.val, " ", rhs_value)
+  end
   return sb:promote()
 end
 
 function Cgen:gen_type(t: *Node): string
-  assert(t and (t.kind == NodeKind.TYPE) or (t.kind == NodeKind.ID and t.type.kind == NodeKind.TYPE) )
+  assert(t and ((t.kind == NodeKind.TYPE) or (t.kind == NodeKind.ID and t.type.kind == NodeKind.TYPE)) )
 
   local str: string = _switch!(true, {
-    [t.is_string] = "String",
-    [t.is_niltype] = "niltype",
+    [t.is_string] = lang_info.LANG_NAME .. "_string",
+    [t.is_niltype] = lang_info.LANG_NAME .. "_niltype",
     [t.is_i64] = "int64_t",
     [t.is_boolean] = "bool",
-    [t.is_void] = "void",
     [t.is_u64] = "uint64_t",
     [t.is_u8] = "uint8_t",
     [t.is_array] = self:gen_type(t.val),
@@ -160,7 +172,7 @@ function Cgen:gen_proc_def(node: *Node)
 
   local name = self.prefix .. "_" .. node.name
 
-  local proc_gen = Cgen.new(node, self.prefix)
+  local proc_gen = Cgen.new(node, self.parser, self.prefix)
   proc_gen.sb_head = self.sb_head
 
   sb:write("typedef ", ret_t, " (*", name, "_type)(")
@@ -412,7 +424,7 @@ Cgen.gen_expr = function(self: *Cgen, node: *Node): string
   local str: string = _switch!(node.kind, {
     [NodeKind.PROC_CALL] = (do
       local proc_call_sb: stringbuilder
-      local id: Option(*Node) = Parser.find_id_up_scope(self.scope, node.name, node.s_index)
+      local id: Option(*Node) = Parser.find_id_decl_up_scope(self.scope, node.name, node.s_index)
       if not (id:is_some() and id:get_some().name == "print") and node.name == "print" then
         proc_call_sb:write(self:gen_print(node))
       else
@@ -422,7 +434,7 @@ Cgen.gen_expr = function(self: *Cgen, node: *Node): string
     end),
     [NodeKind.LITERAL] = (do
       if node.type.is_string then
-        in "(String)" .. Cgen.string(node.lit_val)
+        in "(".. lang_info.LANG_NAME .. "_string)" .. Cgen.string(node.lit_val)
       elseif node.type.is_integral then
         in node.lit_val
       elseif node.type.is_boolean then
@@ -434,7 +446,7 @@ Cgen.gen_expr = function(self: *Cgen, node: *Node): string
       end
       in ""
     end),
-    [NodeKind.BIN_OP] = self:gen_binary_op(node),
+    [NodeKind.BIN_EXPR] = self:gen_bin_expr(node),
     [NodeKind.PROC_DEF] = (do
       if node.type.is_anonymous then
         self:gen_anon_proc_def(node)
@@ -491,7 +503,7 @@ end
 function Cgen:gen_while_loop(node: *Node): string
   assert(node and node.kind == NodeKind.WHILE_LOOP)
 
-  local while_loop_gen = Cgen.new(node, self.prefix)
+  local while_loop_gen = Cgen.new(node, self.parser, self.prefix)
   while_loop_gen.sb_head = self.sb_head
 
   local cond_val: string = while_loop_gen:gen_expr(node.cond)
@@ -623,7 +635,7 @@ function Cgen:final(): string
 
   local scope_str = self:gen_scope()
   sb_main:write(
-    [[
+    ([[
 /* Disable some warnings that the generated code can trigger. */
 #if defined(__clang__) && __clang_major__ >= 3
   #pragma clang diagnostic ignored "-Wtype-limits"
@@ -668,16 +680,18 @@ function Cgen:final(): string
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
+
 
 typedef struct {
   char* data;
   uint64_t size;
-} String;
+} %s_string;
 
-typedef struct {} niltype;
+typedef struct {} %s_niltype;
 #define NIL (niltype){}
 
-]],
+]]):format(lang_info.LANG_NAME, lang_info.LANG_NAME),
     self.sb_head:promote(),
     "\nint main(int argc, char** argv) {\n",
     scope_str,
