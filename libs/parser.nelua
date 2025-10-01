@@ -25,70 +25,70 @@ local Parser = @record{
   tokens: sequence(Token)
 }
 
+local function new_error(kind: ErrLocKind, parser: *Parser, err: string, s_token: Token, e_token: Token): ErrLoc
+  range_check!(kind, ErrLocKind)
+  assert(parser)
+  assert(err ~= "")
+  range_check!(s_token.kind, TokenKind)
+  range_check!(e_token.kind, TokenKind)
+
+  return {
+    kind = kind,
+
+    path = parser.path,
+    content = parser.content,
+    err = err,
+
+    s_index = s_token.s_index,
+    e_index = e_token.e_index,
+    s_pos = {
+      line = s_token.s_pos.line,
+      col = s_token.s_pos.col,
+    },
+    e_pos = {
+      line = e_token.e_pos.line,
+      col = e_token.e_pos.col,
+    },
+  }
+end
+
 local function error_unexpected_token(parser: *Parser, token: Token): ErrLoc
   assert(parser)
   range_check!(token.kind, TokenKind)
 
-  return {
-    path = parser.path,
-    content = parser.content,
-    s_index = token.s_index,
-    e_index = token.e_index,
-    err = ("Unexpected Token '%s'"):format(token.val),
-    kind = ErrLocKind.SYNTAX,
-    s_pos = {
-      line = token.s_pos.line,
-      col = token.s_pos.col,
-    },
-    e_pos = {
-      line = token.e_pos.line,
-      col = token.e_pos.col,
-    },
-  }
+  return new_error(
+    ErrLocKind.SYNTAX,
+    parser,
+    ("Unexpected Token '%s'"):format(token.val),
+    token,
+    token
+  )
 end
 
 local function error_redeclaration(parser: *Parser, token: *Token): ErrLoc
   assert(parser)
   range_check!(token.kind, TokenKind)
 
-  return {
-    path = parser.path,
-    content = parser.content,
-    s_index = token.s_index,
-    e_index = token.e_index,
-    err = ("Redeclaration of id '%s'"):format(token.val),
-    kind = ErrLocKind.SEMANTIC,
-    s_pos = {
-      line = token.s_pos.line,
-      col = token.s_pos.col,
-    },
-    e_pos = {
-      line = token.e_pos.line,
-      col = token.e_pos.col,
-    },
-  }
+  return new_error(
+    ErrLocKind.SEMANTIC,
+    parser,
+    ("Redeclaration of identifier '%s'"):format(token.val),
+    token,
+    token
+  )
 end
 
-local function error_undefined_variable(parser: *Parser, token: *Token): ErrLoc
+local function error_undefined_identifier(parser: *Parser, token: *Token): ErrLoc
   assert(parser)
   range_check!(token.kind, TokenKind)
 
-  return {
-    path = parser.path,
-    content = parser.content,
-    s_index = token.s_index,
-    e_index = token.e_index,
-    err = ("Undefinded variable '%s'"):format(token.val),
-    kind = ErrLocKind.SEMANTIC,
-    s_pos = {
-      line = token.s_pos.line,
-      col = token.s_pos.col,
-    },
-    e_pos = {
-      line = token.e_pos.line,
-      col = token.e_pos.col,
-    },
-  }
+  return new_error(
+    ErrLocKind.SEMANTIC,
+    parser,
+    ("Undefinded identifier '%s'"):format(token.val),
+    token,
+    token
+  )
 end
 
 local NewParserResult = @Result(Parser, ErrLoc)
@@ -1049,7 +1049,7 @@ function Parser:parse_proc_call(scope: *Node): ParseResult
 
   local proc_id_decl_opt = Parser.find_id_decl_up_scope(scope, token.val, token.s_index)
   if proc_id_decl_opt:is_none() then
-    return ParseResult.err(error_undefined_variable(self, token))
+    return ParseResult.err(error_undefined_identifier(self, token))
   end
 
   local proc_id_decl = proc_id_decl_opt:get_some()
@@ -1092,7 +1092,7 @@ function Parser:parse_proc_call(scope: *Node): ParseResult
       error("Unexpected argument")
     end
 
-    local err_loc_opt = self:check_node_type(proc_type.params[index], arg)
+    local err_loc_opt = self:check_node_type(proc_type.params[index].type, arg)
     if err_loc_opt:is_some() then
       return ParseResult.err(err_loc_opt:get_some())
     end
@@ -1112,6 +1112,16 @@ function Parser:parse_proc_call(scope: *Node): ParseResult
     return ParseResult.err(expect_res:get_err())
   end
   local e_token = expect_res:get_ok()
+
+  if index - 1 ~= #proc_type.params then
+    return ParseResult.err(new_error(
+      ErrLocKind.SEMANTIC,
+      self,
+      ("proc '%s' is expecting '%d' argument(s) but got '%d'"):format(proc_call_name, #proc_type.params, index - 1),
+      s_token,
+      e_token
+    ))
+  end
 
   return ParseResult.ok(self:new_proc_call(s_token, e_token, scope, proc_call_args, proc_type.ret_t))
 end
@@ -1333,6 +1343,7 @@ function Parser:parse_id_decl(scope: *Node): ParseResult
   if expect_res:is_err() then
     return ParseResult.err(expect_res:get_err())
   end
+
   local id_type: *Node
   if self:is({ TokenKind.IDENTIFIER }) then
     local parse_res = self:parse_type(scope)
@@ -1343,26 +1354,40 @@ function Parser:parse_id_decl(scope: *Node): ParseResult
     id_type = parse_res:get_ok()
   end
 
-  expect_res = self:expect(TokenKind.EQUALS)
-  if expect_res:is_err() then
-    return ParseResult.err(expect_res:get_err())
-  end
-
-  local parse_res = self:parse_expr(scope)
-  if parse_res:is_err() then
-    return parse_res
-  end
-
-  local id_val = parse_res:get_ok()
-  if id_type then
-    local err_loc_opt = self:check_node_type(id_type, id_val)
-    if err_loc_opt:is_some() then
-      return ParseResult.err(err_loc_opt:get_some())
+  local id_val: *Node
+  if self:is({ TokenKind.EQUALS }) then
+    expect_res = self:expect(TokenKind.EQUALS)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
     end
-  else
-    id_type = id_val.type
+
+    local parse_res = self:parse_expr(scope)
+    if parse_res:is_err() then
+      return parse_res
+    end
+
+    id_val = parse_res:get_ok()
+    if id_type then
+      local err_loc_opt = self:check_node_type(id_type, id_val)
+      if err_loc_opt:is_some() then
+        return ParseResult.err(err_loc_opt:get_some())
+      end
+    else
+      id_type = id_val.type
+    end
   end
+
   local prev_token = self:peek_prev()
+
+  if not id_type and not id_val then
+    return ParseResult.err(new_error(
+      ErrLocKind.SYNTAX,
+      self,
+      "Expected either a 'type' or '=' after ':'",
+      prev_token,
+      prev_token
+    ))
+  end
 
   local id_decl = new(Node)
   $id_decl = {

@@ -178,7 +178,7 @@ function Cgen:gen_proc_def(node: *Node)
   sb:write("typedef ", ret_t, " (*", name, "_type)(")
   if #node.params > 0 then
     for _, param in ipairs(node.params) do
-      sb:write(proc_gen:gen_type(param.type), " ", param.name, ", ")
+      sb:write(proc_gen:gen_type(param.type), " ", self.prefix, "_", param.name, ", ")
     end
     sb:rollback(2)
   end
@@ -186,7 +186,7 @@ function Cgen:gen_proc_def(node: *Node)
   sb:write(ret_t, " ", name, "(")
   if #node.params > 0 then
     for _, param in ipairs(node.params) do
-      sb:write(proc_gen:gen_type(param.type), " ", param.name, ", ")
+      sb:write(proc_gen:gen_type(param.type), " ", self.prefix, "_", param.name, ", ")
     end
     sb:rollback(2)
   end
@@ -338,7 +338,7 @@ function Cgen:gen_print(node: *Node): string
   if #node.args > 0 then
     for _, arg in ipairs(node.args) do
       if arg.is_type then
-        print_sb:write("NIL")
+        print_sb:write(lang_info.LANG_NAME:upper(), "_NIL")
       else
         print_sb:write(self:gen_expr(arg))
       end
@@ -531,7 +531,7 @@ function Cgen:gen_id_decl(node: *Node): string
   local name = self.prefix .. "_" .. node.name
   local _: niltype = _switch!(true, {
     [node.type.is_niltype] = (do
-      sb:write(self:gen_type(node.type), " ", name, " = NIL;\n")
+      sb:write(self:gen_type(node.type), " ", name, " = ", lang_info.LANG_NAME:upper(), "_NIL;\n")
       in nil
     end),
     [node.type.is_string] = (do
@@ -689,9 +689,9 @@ typedef struct {
 } %s_string;
 
 typedef struct {} %s_niltype;
-#define NIL (niltype){}
+#define %s_NIL (%s_niltype){}
 
-]]):format(lang_info.LANG_NAME, lang_info.LANG_NAME),
+]]):format(lang_info.LANG_NAME, lang_info.LANG_NAME, lang_info.LANG_NAME:upper(), lang_info.LANG_NAME),
     self.sb_head:promote(),
     "\nint main(int argc, char** argv) {\n",
     scope_str,
