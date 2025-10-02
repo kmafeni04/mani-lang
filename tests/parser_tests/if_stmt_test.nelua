@@ -1,0 +1,30 @@
+local Parser = require "...libs.parser"
+local ErrLoc = require "...libs.errloc"
+
+do
+  local content = [[
+if true {
+  print("hello world")
+}
+]]
+
+  local new_parser_res = Parser.new("if_stmt", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+
+  local ast = parser_res:get_ok()
+
+  local expected = [[
+AST
+  IF_STMT -> LITERAL(true)
+    PROC_CALL print(
+      LITERAL("hello world")
+    )
+]]
+  local res = ast:tostring()
+  assert(expected == res)
+end
