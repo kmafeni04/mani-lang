@@ -1990,7 +1990,6 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
     [TokenKind.KEYWORD_ELSE] = self:parse_else_stmt(scope),
     [TokenKind.KEYWORD_WHILE] = self:parse_while_loop(scope),
     [TokenKind.KEYWORD_BREAK] = (do
-      -- TODO: Assert that break is the child of a loop
       self:advance()
       if not scope:is_loop() then
         return ParseResult.err(new_error(ErrLocKind.SEMANTIC, self, "break statements must be within a loop", token, token))
