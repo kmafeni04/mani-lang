@@ -406,7 +406,7 @@ Cgen.gen_expr = function(self: *Cgen, node: *Node): string
   local str: string = _switch!(node.kind, {
     [NodeKind.PROC_CALL] = (do
       local proc_call_sb: stringbuilder
-      local id: Option(*Node) = Parser.find_id_decl_up_scope(self.scope, node.name, node.s_index)
+      local id: Option(*Node) = Parser.find_id_decl_up_scope(self.scope, node.name, node.s_pos.index)
       if not (id:is_some() and id:get_some().name == "print") and node.name == "print" then
         proc_call_sb:write(self:gen_print(node))
       else

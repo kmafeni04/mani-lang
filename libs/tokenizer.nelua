@@ -59,8 +59,6 @@ local Token = @record{
   val: string,
   s_pos: Pos,
   e_pos: Pos,
-  s_index: integer,
-  e_index: integer
 }
 
 local tokenizer = @record{}
@@ -187,15 +185,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         kind = TokenKind.COMMENT,
         val = val,
         s_pos = {
+          index = start,
           line = s_line,
           col = s_col,
         },
         e_pos = {
+          index = index,
           line = e_line,
           col = e_col,
         },
-        s_index = start,
-        e_index = index,
       })
     elseif current_char == '"' then
       local start = index
@@ -214,15 +212,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         kind = TokenKind.STRING,
         val = val,
         s_pos = {
+          index = start,
           line = s_line,
           col = s_col,
         },
         e_pos = {
+          index = index,
           line = e_line,
           col = e_col,
         },
-        s_index = start,
-        e_index = index,
       })
     elseif current_char == "*" then
       local line, col = pos_to_line_col(index, content)
@@ -230,15 +228,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         kind = TokenKind.STAR,
         val = current_char,
         s_pos = {
+          index = index,
           line = line,
           col = col,
         },
         e_pos = {
+          index = index,
           line = line,
           col = col,
         },
-        s_index = index,
-        e_index = index,
       })
     elseif current_char == "." then
       local line, col = pos_to_line_col(index, content)
@@ -246,15 +244,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         kind = TokenKind.DOT,
         val = current_char,
         s_pos = {
+          index = index,
           line = line,
           col = col,
         },
         e_pos = {
+          index = index,
           line = line,
           col = col,
         },
-        s_index = index,
-        e_index = index,
       })
     elseif current_char == "[" then
       local line, col = pos_to_line_col(index, content)
@@ -262,15 +260,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         kind = TokenKind.OPEN_BRACKET,
         val = current_char,
         s_pos = {
+          index = index,
           line = line,
           col = col,
         },
         e_pos = {
+          index = index,
           line = line,
           col = col,
         },
-        s_index = index,
-        e_index = index,
       })
     elseif current_char == "]" then
       local line, col = pos_to_line_col(index, content)
@@ -278,15 +276,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         kind = TokenKind.CLOSE_BRACKET,
         val = current_char,
         s_pos = {
+          index = index,
           line = line,
           col = col,
         },
         e_pos = {
+          index = index,
           line = line,
           col = col,
         },
-        s_index = index,
-        e_index = index,
       })
     elseif current_char == "<" then
       local s_line, s_col = pos_to_line_col(index, content)
@@ -296,15 +294,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
           kind = TokenKind.LT_EQS,
           val = current_char .. next_char,
           s_pos = {
+            index = index,
             line = s_line,
             col = s_col,
           },
           e_pos = {
+            index = index + 1,
             line = e_line,
             col = e_col,
           },
-          s_index = index,
-          e_index = index + 1,
         })
         index = index + 1
       else
@@ -312,15 +310,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
           kind = TokenKind.OPEN_ANGLE,
           val = current_char,
           s_pos = {
+            index = index,
             line = s_line,
             col = s_col,
           },
           e_pos = {
+            index = index,
             line = s_line,
             col = s_col,
           },
-          s_index = index,
-          e_index = index,
         })
       end
     elseif current_char == ">" then
@@ -331,15 +329,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
           kind = TokenKind.GT_EQS,
           val = current_char .. next_char,
           s_pos = {
+            index = index,
             line = s_line,
             col = s_col,
           },
           e_pos = {
+            index = index + 1,
             line = e_line,
             col = e_col,
           },
-          s_index = index,
-          e_index = index + 1,
         })
         index = index + 1
       else
@@ -347,15 +345,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
           kind = TokenKind.CLOSE_ANGLE,
           val = current_char,
             s_pos = {
+              index = index,
               line = s_line,
               col = s_col,
             },
             e_pos = {
+              index = index,
               line = s_line,
               col = s_col,
             },
-          s_index = index,
-          e_index = index,
         })
       end
     elseif current_char == "{" then
@@ -364,15 +362,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         kind = TokenKind.OPEN_CURLY,
         val = current_char,
         s_pos = {
+          index = index,
           line = line,
           col = col,
         },
         e_pos = {
+          index = index,
           line = line,
           col = col,
         },
-        s_index = index,
-        e_index = index,
       })
     elseif current_char == "}" then
       local line, col = pos_to_line_col(index, content)
@@ -380,15 +378,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         kind = TokenKind.CLOSE_CURLY,
         val = current_char,
         s_pos = {
+          index = index,
           line = line,
           col = col,
         },
         e_pos = {
+          index = index,
           line = line,
           col = col,
         },
-        s_index = index,
-        e_index = index,
       })
     elseif current_char == "(" then
       local line, col = pos_to_line_col(index, content)
@@ -396,15 +394,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         kind = TokenKind.OPEN_PAREN,
         val = current_char,
         s_pos = {
+          index = index,
           line = line,
           col = col,
         },
         e_pos = {
+          index = index,
           line = line,
           col = col,
         },
-        s_index = index,
-        e_index = index,
       })
     elseif current_char == "," then
       local line, col = pos_to_line_col(index, content)
@@ -412,15 +410,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         kind = TokenKind.COMMA,
         val = current_char,
         s_pos = {
+          index = index,
           line = line,
           col = col,
         },
         e_pos = {
+          index = index,
           line = line,
           col = col,
         },
-        s_index = index,
-        e_index = index,
       })
     elseif current_char == ":" then
       local line, col = pos_to_line_col(index, content)
@@ -428,15 +426,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         kind = TokenKind.COLON,
         val = current_char,
         s_pos = {
+          index = index,
           line = line,
           col = col,
         },
         e_pos = {
+          index = index,
           line = line,
           col = col,
         },
-        s_index = index,
-        e_index = index,
       })
     elseif current_char == ")" then
       local line, char = pos_to_line_col(index, content)
@@ -444,15 +442,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         kind = TokenKind.CLOSE_PAREN,
         val = current_char,
         s_pos = {
+          index = index,
           line = line,
           col = char,
         },
         e_pos = {
+          index = index,
           line = line,
           col = char,
         },
-        s_index = index,
-        e_index = index,
       })
     elseif current_char:match("[%a_]") then
       local sb: stringbuilder
@@ -504,15 +502,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         kind = ttype,
         val = word,
         s_pos = {
+          index = start,
           line = s_pos_line,
           col = s_pos_col,
         },
         e_pos = {
+          index = index,
           line = e_pos_line,
           col = e_pos_col,
         },
-        s_index = start,
-        e_index = index,
       })
     elseif current_char == "!" and next_char == "=" then
       local s_line, s_col = pos_to_line_col(index, content)
@@ -521,15 +519,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         kind = TokenKind.NOT_EQS,
         val = current_char .. next_char,
         s_pos = {
+          index = index,
           line = s_line,
           col = s_col,
         },
         e_pos = {
+          index = index + 1,
           line = e_line,
           col = e_col,
         },
-        s_index = index,
-        e_index = index + 1,
       })
       index = index + 1
     elseif current_char == "=" then
@@ -540,15 +538,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
           kind = TokenKind.EQUATES,
           val = current_char .. next_char,
           s_pos = {
+            index = index,
             line = s_line,
             col = s_col,
           },
           e_pos = {
+            index = index + 1,
             line = e_line,
             col = e_col,
           },
-          s_index = index,
-          e_index = index + 1,
         })
         index = index + 1
       else
@@ -556,15 +554,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
           kind = TokenKind.EQUALS,
           val = current_char,
           s_pos = {
+            index = index,
             line = s_line,
             col = s_col,
           },
           e_pos = {
+            index = index,
             line = s_line,
             col = s_col,
           },
-          s_index = index,
-          e_index = index,
         })
       end
     elseif current_char:match("[%d]") then
@@ -610,17 +608,19 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         local e_line, e_col = pos_to_line_col(index, content)
         local token = content:sub(start, index)
         return TokenizeResult.err({
-          path = path,
-          content = content,
-          s_index = start,
-          e_index = index,
+          loc = {
+            path = path,
+            content = content,
+          },
           err = ("Malformed number '%s'"):format(token),
           kind = ErrLocKind.SYNTAX,
           s_pos = {
+            index = start,
             line = s_line,
             col = s_col,
           },
           e_pos = {
+            index = index,
             line = e_line,
             col = e_col,
           },
@@ -633,15 +633,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
           kind = kind,
           val = val,
           s_pos = {
+            index = start,
             line = s_pos_line,
             col = s_pos_col,
           },
           e_pos = {
+            index = index,
             line = e_pos_line,
             col = e_pos_col,
           },
-          s_index = start,
-          e_index = index,
         })
       end
     elseif current_char == "+" then
@@ -650,15 +650,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         kind = TokenKind.PLUS,
         val = current_char,
         s_pos = {
+          index = index,
           line = line,
           col = col,
         },
         e_pos = {
+          index = index,
           line = line,
           col = col,
         },
-        s_index = index,
-        e_index = index,
       })
     elseif current_char == "-" then
       local line, col = pos_to_line_col(index, content)
@@ -666,30 +666,32 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         kind = TokenKind.MINUS,
         val = current_char,
         s_pos = {
+          index = index,
           line = line,
           col = col,
         },
         e_pos = {
+          index = index,
           line = line,
           col = col,
         },
-        s_index = index,
-        e_index = index,
       })
     else
       local line, col = pos_to_line_col(index, content)
       return TokenizeResult.err({
-          path = path,
-          s_index = index,
-          e_index = index,
-          content = content,
+          loc = {
+            path = path,
+            content = content,
+          },
           err = ("Unknown token '%s'"):format(current_char),
           kind = ErrLocKind.SYNTAX,
           s_pos = {
+            index = index,
             line = line,
             col = col,
           },
           e_pos = {
+            index = index,
             line = line,
             col = col,
           },
@@ -702,15 +704,15 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
     kind = TokenKind.EOF,
     val = "",
     s_pos = {
+      index = #content,
       line = line,
       col = col,
     },
     e_pos = {
+      index = #content,
       line = line,
       col = col,
     },
-    s_index = #content,
-    e_index = #content,
   })
 
   return TokenizeResult.ok(tokens)

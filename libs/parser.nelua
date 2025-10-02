@@ -8,6 +8,7 @@ local Result = varaint.Result
 local Option = varaint.Option
 
 local Pos = require "..generic.pos"
+local Loc = require "..generic.loc"
 local lang_info = require "..generic.lang_info"
 
 local pos_to_line_col = require ".pos_to_line_col"
@@ -21,49 +22,21 @@ local ErrLoc = require ".errloc"
 local ErrLocKind = ErrLoc.ErrLocKind
 
 local Parser = @record{
-  path: string,
+  loc: Loc,
   index: integer,
-  content: string,
   tokens: sequence(Token)
 }
-
-local function new_error(kind: ErrLocKind, parser: *Parser, err: string, s_token: Token, e_token: Token): ErrLoc
-  range_check!(kind, ErrLocKind)
-  assert(parser)
-  assert(err ~= "")
-  range_check!(s_token.kind, TokenKind)
-  range_check!(e_token.kind, TokenKind)
-
-  return {
-    kind = kind,
-
-    path = parser.path,
-    content = parser.content,
-    err = err,
-
-    s_index = s_token.s_index,
-    e_index = e_token.e_index,
-    s_pos = {
-      line = s_token.s_pos.line,
-      col = s_token.s_pos.col,
-    },
-    e_pos = {
-      line = e_token.e_pos.line,
-      col = e_token.e_pos.col,
-    },
-  }
-end
 
 local function error_unexpected_token(parser: *Parser, token: Token): ErrLoc
   assert(parser)
   range_check!(token.kind, TokenKind)
 
-  return new_error(
+  return ErrLoc.new(
     ErrLocKind.SYNTAX,
-    parser,
+    parser.loc,
     ("Unexpected Token '%s'"):format(token.val),
-    token,
-    token
+    token.s_pos,
+    token.e_pos
   )
 end
 
@@ -71,12 +44,12 @@ local function error_redeclaration(parser: *Parser, token: *Token): ErrLoc
   assert(parser)
   range_check!(token.kind, TokenKind)
 
-  return new_error(
+  return ErrLoc.new(
     ErrLocKind.SEMANTIC,
-    parser,
+    parser.loc,
     ("Redeclaration of identifier '%s'"):format(token.val),
-    token,
-    token
+    token.s_pos,
+    token.e_pos
   )
 end
 
@@ -84,12 +57,12 @@ local function error_undefined_identifier(parser: *Parser, token: *Token): ErrLo
   assert(parser)
   range_check!(token.kind, TokenKind)
 
-  return new_error(
+  return ErrLoc.new(
     ErrLocKind.SEMANTIC,
-    parser,
+    parser.loc,
     ("Undefinded identifier '%s'"):format(token.val),
-    token,
-    token
+    token.s_pos,
+    token.e_pos
   )
 end
 
@@ -100,9 +73,11 @@ function Parser.new(path: string, content: string): NewParserResult
     return NewParserResult.err(tokenize_res:get_err())
   end
   return NewParserResult.ok({
-    path = path,
+    loc = {
+      path = path,
+      content = content,
+    },
     index = 1,
-    content = content,
     tokens = tokenize_res:get_ok(),
   })
 end
@@ -112,20 +87,20 @@ function Parser:peek()
     return self.tokens[self.index]
   end
 
-  local line, col = pos_to_line_col(#self.content, self.content)
+  local line, col = pos_to_line_col(#self.loc.content, self.loc.content)
   return Token{
     kind = TokenKind.EOF,
     val = "",
     s_pos = {
+      index = #self.loc.content,
       line = line,
       col = col,
     },
     e_pos = {
+      index = #self.loc.content,
       line = line,
       col = col,
     },
-    s_index = #self.content,
-    e_index = #self.content,
   }
 end
 
@@ -134,20 +109,20 @@ function Parser:peek_next()
     return self.tokens[self.index + 1]
   end
 
-  local line, col = pos_to_line_col(#self.content, self.content)
+  local line, col = pos_to_line_col(#self.loc.content, self.loc.content)
   return Token{
     kind = TokenKind.EOF,
     val = "",
     s_pos = {
+      index = #self.loc.content,
       line = line,
       col = col,
     },
     e_pos = {
+      index = #self.loc.content,
       line = line,
       col = col,
     },
-    s_index = #self.content,
-    e_index = #self.content,
   }
 end
 
@@ -156,20 +131,20 @@ function Parser:peek_prev()
     return self.tokens[self.index - 1]
   end
 
-  local line, col = pos_to_line_col(#self.content, self.content)
+  local line, col = pos_to_line_col(#self.loc.content, self.loc.content)
   return Token{
     kind = TokenKind.EOF,
     val = "",
     s_pos = {
+      index = #self.loc.content,
       line = line,
       col = col,
     },
     e_pos = {
+      index = #self.loc.content,
       line = line,
       col = col,
     },
-    s_index = #self.content,
-    e_index = #self.content,
   }
 end
 
@@ -209,7 +184,7 @@ function Parser:expect_one_of(token_kinds: sequence(TokenKind), msg: string): Ex
     sb:write(" }' but got '", TokenKind_tostring(token.kind), "'")
   end
 
-  return ExpectResult.err(new_error(ErrLocKind.SYNTAX, self, sb:promote(), token, token))
+  return ExpectResult.err(ErrLoc.new(ErrLocKind.SYNTAX, self.loc, sb:promote(), token.s_pos, token.e_pos))
 end
 
 function Parser:expect(token_kind: TokenKind, msg: string): ExpectResult
@@ -233,43 +208,19 @@ function Parser:advance_comma_unless(token_kind: TokenKind): ExpectResult
   local token = self:peek()
   if token.kind == TokenKind.COMMA then
     if self:peek_next().kind == token_kind or self:peek_next().kind == TokenKind.EOF then
-      return ExpectResult.err({
-        path = self.path,
-        content = self.content,
-        s_index = token.s_index,
-        e_index = token.e_index,
-        err = "Trailing comma",
-        kind = ErrLocKind.SYNTAX,
-        s_pos = {
-          line = token.s_pos.line,
-          col = token.s_pos.col,
-        },
-        e_pos = {
-          line = token.e_pos.line,
-          col = token.e_pos.col,
-        },
-      })
+      return ExpectResult.err(ErrLoc.new(ErrLocKind.SYNTAX, self.loc, "Trailing comma", token.s_pos, token.e_pos))
     end
     return ExpectResult.ok(self:advance())
   end
 
   if token.kind ~= token_kind and token.kind ~= TokenKind.EOF then
-    return ExpectResult.err({
-      path = self.path,
-      content = self.content,
-      s_index = token.s_index,
-      e_index = token.e_index,
-      err = ("Expected Token value ',' but got '%s'"):format(token.val),
-      kind = ErrLocKind.SYNTAX,
-      s_pos = {
-        line = token.s_pos.line,
-        col = token.s_pos.col,
-      },
-      e_pos = {
-        line = token.e_pos.line,
-        col = token.e_pos.col,
-      },
-    })
+    return ExpectResult.err(ErrLoc.new(
+      ErrLocKind.SYNTAX,
+      self.loc,
+      ("Expected Token value ',' but got '%s'"):format(token.val),
+      token.s_pos,
+      token.e_pos)
+    )
   end
 
   return ExpectResult.ok(token)
@@ -284,22 +235,13 @@ function Parser:advance_comma_until(token_kind: TokenKind): ExpectResult
   end
 
   if token.kind ~= token_kind and token.kind ~= TokenKind.EOF then
-    return ExpectResult.err({
-      path = self.path,
-      content = self.content,
-      s_index = token.s_index,
-      e_index = token.e_index,
-      err = ("Expected Token value ',' but got '%s'"):format(token.val),
-      kind = ErrLocKind.SYNTAX,
-      s_pos = {
-        line = token.s_pos.line,
-        col = token.s_pos.col,
-      },
-      e_pos = {
-        line = token.e_pos.line,
-        col = token.e_pos.col,
-      },
-    })
+    return ExpectResult.err(ErrLoc.new(
+      ErrLocKind.SYNTAX,
+      self.loc,
+      ("Expected Token value ',' but got '%s'"):format(token.val),
+      token.s_pos,
+      token.e_pos)
+    )
   end
 
   return ExpectResult.ok(token)
@@ -354,8 +296,6 @@ Node = @record{
 
   s_pos: Pos,
   e_pos: Pos,
-  s_index: integer,
-  e_index: integer,
 
   name: string,
   type: *Node,
@@ -761,16 +701,8 @@ function Parser:new_literal(scope: *Node, n_type: *Node): *Node
   $node = {
     kind = NodeKind.LITERAL,
 
-    s_pos = {
-      line = token.s_pos.line,
-      col = token.s_pos.col,
-    },
-    e_pos = {
-      line = token.e_pos.line,
-      col = token.e_pos.col,
-    },
-    s_index = token.s_index,
-    e_index = token.e_index,
+    s_pos = token.s_pos,
+    e_pos = token.e_pos,
     scope = scope,
 
     type = n_type,
@@ -827,20 +759,11 @@ function Parser:check_node_type(typ: *Node, node: *Node): Option(ErrLoc)
   return Option.Some(ErrLoc{
     kind = ErrLocKind.SEMANTIC,
 
-    path = self.path,
-    content = self.content,
+    loc = self.loc,
     err = ("Type '%s' does not match type '%s'"):format(node.type.name, typ.name),
 
-    s_index = node.s_index,
-    e_index = node.e_index,
-    s_pos = {
-      line = node.s_pos.line,
-      col = node.s_pos.col,
-    },
-    e_pos = {
-      line = node.e_pos.line,
-      col = node.e_pos.col,
-    },
+    s_pos = node.s_pos,
+    e_pos = node.e_pos,
   })
 end
 
@@ -884,16 +807,8 @@ function Parser:new_binary_expr(scope: *Node, lhs: *Node, op: Token, rhs: *Node)
   $binary_expr = {
     kind = NodeKind.BIN_EXPR,
 
-    s_pos = {
-      line = lhs.s_pos.line,
-      col = lhs.s_pos.col
-    },
-    e_pos = {
-      line = rhs.e_pos.line,
-      col = rhs.e_pos.col
-    },
-    s_index = lhs.s_index,
-    e_index = rhs.e_index,
+    s_pos = lhs.s_pos,
+    e_pos = rhs.e_pos,
     scope = scope,
 
     lhs = lhs,
@@ -913,16 +828,8 @@ function Parser:new_proc_call(s_token: Token, e_token: Token, scope: *Node, args
   local proc_call = new(Node)
   $proc_call = {
     kind = NodeKind.PROC_CALL,
-    s_pos = {
-      line = s_token.s_pos.line,
-      col = s_token.s_pos.col,
-    },
-    e_pos = {
-      line = e_token.s_pos.line,
-      col = e_token.s_pos.col,
-    },
-    s_index = s_token.s_index,
-    e_index = e_token.e_index,
+    s_pos = s_token.s_pos,
+    e_pos = e_token.e_pos,
     scope = scope,
 
     name = s_token.val,
@@ -939,7 +846,7 @@ function Parser.find_id_decl_up_scope(scope: *Node, name: string, s_index: integ
   assert(scope and scope:is_scope())
 
   for _, node in ipairs(scope.children) do
-    if (node.kind == NodeKind.ID_DECL or node.kind == NodeKind.PROC_DEF) and node.name == name and node.s_index <= s_index then
+    if (node.kind == NodeKind.ID_DECL or node.kind == NodeKind.PROC_DEF) and node.name == name and node.s_pos.index <= s_index then
       node.used = true
       return Option.Some(node)
     end
@@ -961,23 +868,14 @@ function Parser:parse_id(scope: *Node): ParseResult
   end
   local token = expect_res:get_ok()
 
-  local id_decl_opt: Option(*Node) = Parser.find_id_decl_up_scope(scope, token.val, token.s_index)
+  local id_decl_opt: Option(*Node) = Parser.find_id_decl_up_scope(scope, token.val, token.s_pos.index)
   if id_decl_opt:is_none() then
     return ParseResult.err({
-      path = self.path,
-      content = self.content,
-      s_index = token.s_index,
-      e_index = token.e_index,
+      loc = self.loc,
       err = ("Undeclared identifier '%s'"):format(token.val),
       kind = ErrLocKind.SEMANTIC,
-      s_pos = {
-        line = token.s_pos.line,
-        col = token.s_pos.col,
-      },
-      e_pos = {
-        line = token.e_pos.line,
-        col = token.e_pos.col,
-      },
+      s_pos = token.s_pos,
+      e_pos = token.e_pos,
     })
   end
 
@@ -986,16 +884,8 @@ function Parser:parse_id(scope: *Node): ParseResult
   local node: *Node = new(Node)
   $node = {
     kind = NodeKind.ID,
-    s_pos = {
-      line = token.s_pos.line,
-      col = token.s_pos.col,
-    },
-    e_pos = {
-      line = token.e_pos.line,
-      col = token.e_pos.col,
-    },
-    s_index = token.s_index,
-    e_index = token.e_index,
+    s_pos = token.s_pos,
+    e_pos = token.e_pos,
 
     name = token.val,
     type = id_decl_node.type,
@@ -1061,29 +951,20 @@ function Parser:parse_proc_call(scope: *Node): ParseResult
     end
   end
 
-  local proc_id_decl_opt = Parser.find_id_decl_up_scope(scope, token.val, token.s_index)
+  local proc_id_decl_opt = Parser.find_id_decl_up_scope(scope, token.val, token.s_pos.index)
   if proc_id_decl_opt:is_none() then
     return ParseResult.err(error_undefined_identifier(self, token))
   end
 
   local proc_id_decl = proc_id_decl_opt:get_some()
   if not proc_id_decl.type.is_proc then
-    return ParseResult.err({
-      path = self.path,
-      content = self.content,
-      s_index = token.s_index,
-      e_index = token.e_index,
-      err = ("Identifier '%s' is not a function"):format(proc_id_decl.name),
-      kind = ErrLocKind.SYNTAX,
-      s_pos = {
-        line = token.s_pos.line,
-        col = token.s_pos.col,
-      },
-      e_pos = {
-        line = token.e_pos.line,
-        col = token.e_pos.col,
-      },
-    })
+    return ParseResult.err(ErrLoc.new(
+      ErrLocKind.SYNTAX,
+      self.loc,
+      ("Identifier '%s' is not a function"):format(proc_id_decl.name),
+      token.s_pos,
+      token.e_pos)
+    )
   end
 
   expect_res = self:expect(TokenKind.OPEN_PAREN)
@@ -1348,7 +1229,7 @@ function Parser:parse_id_decl(scope: *Node): ParseResult
   local token = s_token
   local id_name = token.val
 
-  local id_opt = Parser.find_id_decl_up_scope(scope, id_name, token.s_index)
+  local id_opt = Parser.find_id_decl_up_scope(scope, id_name, token.s_pos.index)
   if id_opt:is_some() then
     return ParseResult.err(error_redeclaration(self, token))
   end
@@ -1394,12 +1275,12 @@ function Parser:parse_id_decl(scope: *Node): ParseResult
   local prev_token = self:peek_prev()
 
   if not id_type and not id_val then
-    return ParseResult.err(new_error(
+    return ParseResult.err(ErrLoc.new(
       ErrLocKind.SYNTAX,
-      self,
+      self.loc,
       "Expected either a 'type' or '=' after ':'",
-      prev_token,
-      prev_token
+      prev_token.s_pos,
+      prev_token.e_pos
     ))
   end
 
@@ -1407,16 +1288,8 @@ function Parser:parse_id_decl(scope: *Node): ParseResult
   $id_decl = {
     kind = NodeKind.ID_DECL,
 
-    s_pos = {
-      line = s_token.s_pos.line,
-      col = s_token.s_pos.col
-    },
-    e_pos = {
-      line = prev_token.e_pos.line,
-      col = prev_token.e_pos.col
-    },
-    s_index = s_token.s_index,
-    e_index = prev_token.e_index,
+    s_pos = s_token.s_pos,
+    e_pos = prev_token.e_pos,
     scope = scope,
 
     type = id_type,
@@ -1455,18 +1328,9 @@ function Parser:parse_assignment(scope: *Node): ParseResult
   $assignment_node = {
     kind = NodeKind.ASSIGNMENT,
 
-    s_pos = {
-      line = assignment_id.s_pos.line,
-      col = assignment_id.s_pos.col,
-    },
-    e_pos = {
-      line = assignment_val.e_pos.line,
-      col = assignment_val.e_pos.col,
-    },
+    s_pos = assignment_id.s_pos,
+    e_pos = assignment_val.e_pos,
     scope = scope,
-
-    s_index = assignment_id.s_index,
-    e_index = assignment_val.e_index,
 
     id = assignment_id,
     val = assignment_val
@@ -1504,7 +1368,7 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
   end
   local proc_def_name = expect_res:get_ok().val
 
-  local id_opt = Parser.find_id_decl_up_scope(scope, proc_def_name, token.s_index)
+  local id_opt = Parser.find_id_decl_up_scope(scope, proc_def_name, token.s_pos.index)
   if id_opt:is_some() then
     return ParseResult.err(error_redeclaration(self, token))
   end
@@ -1513,11 +1377,7 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
 
   $proc_def = {
     kind = NodeKind.PROC_DEF,
-    s_pos = {
-      line = s_token.s_pos.line,
-      col = s_token.s_pos.col,
-    },
-    s_index = s_token.s_index,
+    s_pos = s_token.s_pos,
     scope = scope,
 
     name = proc_def_name,
@@ -1587,16 +1447,8 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
   $proc_id_decl = {
     kind = NodeKind.ID_DECL,
 
-    s_pos = {
-      line = proc_def.s_pos.line,
-      col = proc_def.s_pos.col,
-    },
-    e_pos = {
-      line = proc_sig_end.e_pos.line,
-      col = proc_sig_end.e_pos.col
-    },
-    s_index = proc_def.s_index,
-    e_index = proc_sig_end.e_index,
+    s_pos = proc_def.s_pos,
+    e_pos = proc_sig_end.e_pos,
     scope = scope,
 
     name = proc_def.name,
@@ -1627,20 +1479,11 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
       return ParseResult.err({
         kind = ErrLocKind.SEMANTIC,
 
-        path = self.path,
-        content = self.content,
+        loc = self.loc,
         err = ("Return statement type '%s' does not match defined return type '%s'"):format(ret_stmt_val.type.name, proc_def.ret_t.name),
 
-        s_index = ret_stmt_val.s_index,
-        e_index = ret_stmt_val.e_index,
-        s_pos = {
-          line = ret_stmt_val.s_pos.line,
-          col = ret_stmt_val.s_pos.col,
-        },
-        e_pos = {
-          line = ret_stmt_val.e_pos.line,
-          col = ret_stmt_val.e_pos.col,
-        },
+        s_pos = ret_stmt_val.s_pos,
+        e_pos = ret_stmt_val.e_pos,
       })
     end
   end
@@ -1661,12 +1504,8 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
   end
   proc_def.children:remove(1)
 
-  proc_def.e_index = token.e_index
-  proc_def.e_pos = {
-    line = token.e_pos.line,
-    col = token.e_pos.col,
-  }
-  proc_def.content = self.content:sub(proc_def.s_index, proc_def.e_index)
+  proc_def.e_pos = token.e_pos
+  proc_def.content = self.loc.content:sub(proc_def.s_pos.index, proc_def.e_pos.index)
 
   return ParseResult.ok(proc_def)
 end
@@ -1683,11 +1522,7 @@ function Parser:parse_return_node(scope: *Node): ParseResult
   local node: *Node = new(Node)
   local _node: Node = $node
   _node = {
-    s_pos = {
-      line = token.s_pos.line,
-      col = token.s_pos.col,
-    },
-    s_index = token.s_index,
+    s_pos = token.s_pos,
     kind = NodeKind.RETURN,
     scope = scope,
   }
@@ -1702,12 +1537,8 @@ function Parser:parse_return_node(scope: *Node): ParseResult
   end
   local token = self:peek_prev()
 
-  _node.e_pos = {
-    line = token.e_pos.line,
-    col = token.e_pos.col,
-  }
+  _node.e_pos = token.e_pos
   _node.val = ret_value
-  _node.e_index = token.e_index
   $node = _node
   return ParseResult.ok(node)
 end
@@ -1736,11 +1567,7 @@ function Parser:parse_while_loop(scope: *Node): ParseResult
 
   $while_loop = {
     kind = NodeKind.WHILE_LOOP,
-    s_pos = {
-      line = s_token.s_pos.line,
-      col = s_token.s_pos.col,
-    },
-    s_index = s_token.s_index,
+    s_pos = s_token.s_pos,
     scope = scope,
 
     cond = while_cond
@@ -1761,12 +1588,8 @@ function Parser:parse_while_loop(scope: *Node): ParseResult
   end
   local e_token = expect_res:get_ok()
 
-  while_loop.e_index = e_token.e_index
-  while_loop.e_pos = {
-    line = e_token.e_pos.line,
-    col = e_token.e_pos.col,
-  }
-  while_loop.content = self.content:sub(while_loop.s_index, while_loop.e_index)
+  while_loop.e_pos = e_token.e_pos
+  while_loop.content = self.loc.content:sub(while_loop.s_pos.index, while_loop.e_pos.index)
 
   return ParseResult.ok(while_loop)
 end
@@ -1827,11 +1650,7 @@ function Parser:parse_for_loop(scope: *Node): ParseResult
 
   $for_loop = {
     kind = NodeKind.FOR_LOOP,
-    s_pos = {
-      line = s_token.s_pos.line,
-      col = s_token.s_pos.col,
-    },
-    s_index = s_token.s_index,
+    s_pos = s_token.s_pos,
     scope = scope,
 
     id = for_loop_id,
@@ -1859,12 +1678,8 @@ function Parser:parse_for_loop(scope: *Node): ParseResult
   end
   local e_token = expect_res:get_ok()
 
-  for_loop.e_index = e_token.e_index
-  for_loop.e_pos = {
-    line = e_token.e_pos.line,
-    col = e_token.e_pos.col,
-  }
-  for_loop.content = self.content:sub(for_loop.s_index, for_loop.e_index)
+  for_loop.e_pos = e_token.e_pos
+  for_loop.content = self.loc.content:sub(for_loop.s_pos.index, for_loop.e_pos.index)
 
   return ParseResult.ok(for_loop)
 end
@@ -1893,11 +1708,7 @@ function Parser:parse_if_stmt(scope: *Node): ParseResult
 
   $if_stmt = {
     kind = NodeKind.IF_STMT,
-    s_pos = {
-      line = s_token.s_pos.line,
-      col = s_token.s_pos.col,
-    },
-    s_index = s_token.s_index,
+    s_pos = s_token.s_pos,
     scope = scope,
 
     cond = if_cond
@@ -1918,12 +1729,8 @@ function Parser:parse_if_stmt(scope: *Node): ParseResult
   end
   local e_token = expect_res:get_ok()
 
-  if_stmt.e_index = e_token.e_index
-  if_stmt.e_pos = {
-    line = e_token.e_pos.line,
-    col = e_token.e_pos.col,
-  }
-  if_stmt.content = self.content:sub(if_stmt.s_index, if_stmt.e_index)
+  if_stmt.e_pos = e_token.e_pos
+  if_stmt.content = self.loc.content:sub(if_stmt.s_pos.index, if_stmt.e_pos.index)
 
   return ParseResult.ok(if_stmt)
 end
@@ -1938,7 +1745,7 @@ function Parser:parse_elif_stmt(scope: *Node): ParseResult
   local s_token = expect_res:get_ok()
 
   if scope.children[#scope.children].kind ~= NodeKind.IF_STMT then
-    return ParseResult.err(new_error(ErrLocKind.SYNTAX, self, "if statement expected before elif", s_token, s_token))
+    return ParseResult.err(ErrLoc.new(ErrLocKind.SYNTAX, self.loc, "if statement expected before elif", s_token.s_pos, s_token.e_pos))
   end
 
   local parse_res = self:parse_expr(scope)
@@ -1956,11 +1763,7 @@ function Parser:parse_elif_stmt(scope: *Node): ParseResult
 
   $elif_stmt = {
     kind = NodeKind.ELIF_STMT,
-    s_pos = {
-      line = s_token.s_pos.line,
-      col = s_token.s_pos.col,
-    },
-    s_index = s_token.s_index,
+    s_pos = s_token.s_pos,
     scope = scope,
 
     cond = elif_cond
@@ -1981,12 +1784,8 @@ function Parser:parse_elif_stmt(scope: *Node): ParseResult
   end
   local e_token = expect_res:get_ok()
 
-  elif_stmt.e_index = e_token.e_index
-  elif_stmt.e_pos = {
-    line = e_token.e_pos.line,
-    col = e_token.e_pos.col,
-  }
-  elif_stmt.content = self.content:sub(elif_stmt.s_index, elif_stmt.e_index)
+  elif_stmt.e_pos = e_token.e_pos
+  elif_stmt.content = self.loc.content:sub(elif_stmt.s_pos.index, elif_stmt.e_pos.index)
 
   return ParseResult.ok(elif_stmt)
 end
@@ -2001,7 +1800,7 @@ function Parser:parse_else_stmt(scope: *Node): ParseResult
   local s_token = expect_res:get_ok()
 
   if scope.children[#scope.children].kind ~= NodeKind.IF_STMT and scope.children[#scope.children].kind ~= NodeKind.ELIF_STMT then
-    return ParseResult.err(new_error(ErrLocKind.SYNTAX, self, "either if or elif statement expected before else", s_token, s_token))
+    return ParseResult.err(ErrLoc.new(ErrLocKind.SYNTAX, self.loc, "either if or elif statement expected before else", s_token.s_pos, s_token.e_pos))
   end
 
   expect_res = self:expect(TokenKind.OPEN_CURLY)
@@ -2013,11 +1812,7 @@ function Parser:parse_else_stmt(scope: *Node): ParseResult
 
   $else_stmt = {
     kind = NodeKind.ELSE_STMT,
-    s_pos = {
-      line = s_token.s_pos.line,
-      col = s_token.s_pos.col,
-    },
-    s_index = s_token.s_index,
+    s_pos = s_token.s_pos,
     scope = scope,
   }
 
@@ -2036,12 +1831,8 @@ function Parser:parse_else_stmt(scope: *Node): ParseResult
   end
   local e_token = expect_res:get_ok()
 
-  else_stmt.e_index = e_token.e_index
-  else_stmt.e_pos = {
-    line = e_token.e_pos.line,
-    col = e_token.e_pos.col,
-  }
-  else_stmt.content = self.content:sub(else_stmt.s_index, else_stmt.e_index)
+  else_stmt.e_pos = e_token.e_pos
+  else_stmt.content = self.loc.content:sub(else_stmt.s_pos.index, else_stmt.e_pos.index)
 
   return ParseResult.ok(else_stmt)
 end
@@ -2060,16 +1851,8 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
       self:advance()
       local node: *Node = new(Node)
       $node = {
-        s_pos = {
-          line = token.s_pos.line,
-          col = token.s_pos.col,
-        },
-        e_pos = {
-          line = token.e_pos.line,
-          col = token.e_pos.col,
-        },
-        s_index = token.s_index,
-        e_index = token.e_index,
+        s_pos = token.s_pos,
+        e_pos = token.e_pos,
         kind = NodeKind.COMMENT,
         scope = scope,
       }
@@ -2094,22 +1877,14 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
     [TokenKind.KEYWORD_BREAK] = (do
       self:advance()
       if not scope:is_loop() then
-        return ParseResult.err(new_error(ErrLocKind.SEMANTIC, self, "break statements must be within a loop", token, token))
+        return ParseResult.err(ErrLoc.new(ErrLocKind.SEMANTIC, self.loc, "break statements must be within a loop", token.s_pos, token.e_pos))
       end
       local node: *Node = new(Node)
       $node = {
         kind = NodeKind.BREAK,
 
-        s_pos = {
-          line = token.s_pos.line,
-          col = token.s_pos.col,
-        },
-        e_pos = {
-          line = token.e_pos.line,
-          col = token.e_pos.col,
-        },
-        s_index = token.s_index,
-        e_index = token.e_index,
+        s_pos = token.s_pos,
+        e_pos = token.e_pos,
 
         scope = scope,
       }
@@ -2134,24 +1909,24 @@ end
 
 function Parser:parse(): ParseResult
   local ast = new(Node)
-  local s_line, s_col = pos_to_line_col(1, self.content)
-  local e_line, e_col = pos_to_line_col(#self.content, self.content)
+  local s_line, s_col = pos_to_line_col(1, self.loc.content)
+  local e_line, e_col = pos_to_line_col(#self.loc.content, self.loc.content)
   $ast = {
     kind = NodeKind.AST,
 
     s_pos = {
+      index = 1,
       line = s_line,
       col = s_col
     },
     e_pos = {
+      index = #self.loc.content,
       line = e_line,
       col = e_col
     },
-    s_index = 1,
-    e_index = #self.content,
     scope = nilptr,
 
-    content = self.content,
+    content = self.loc.content,
   }
   local res = self:parse_scope(ast, TokenKind.EOF)
   if res:is_err() then

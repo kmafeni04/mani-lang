@@ -1,4 +1,5 @@
 local Pos = @record{
+  index: integer,
   line: integer,
   col: integer
 }

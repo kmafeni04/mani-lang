@@ -1,6 +1,7 @@
 local AnsiColor = require 'ansicolor-nelua.ansicolor'
 
 local Pos = require "..generic.pos"
+local Loc = require "..generic.loc"
 
 local ErrLocKind = @enum{
   _UNDEFINED = 0,
@@ -12,14 +13,11 @@ local ErrLocKind = @enum{
 local ErrLoc = @record{
   kind: ErrLocKind,
 
-  path: string,
-  content: string,
+  loc: Loc,
   err: string,
 
   s_pos: Pos,
   e_pos: Pos,
-  s_index: integer,
-  e_index: integer
 }
 
 local ErrLoc.ErrLocKind = ErrLocKind
@@ -35,12 +33,11 @@ function ErrLoc.ErrLocKind_tostring(kind: ErrLocKind): string
   return ""
 end
 
-
 -- TODO: This isn't complete as it does not take into account multiline errors
 function ErrLoc:tostring()
   local error_line: string
   local line_no = 1
-  for _, line_span in (self.content .. "\n"):gmatch("([^\n]*)\n") do
+  for _, line_span in (self.loc.content .. "\n"):gmatch("([^\n]*)\n") do
     if line_no == self.s_pos.line then
       error_line = line_span[0]
       break
@@ -50,7 +47,7 @@ function ErrLoc:tostring()
 
   local sb: stringbuilder
   sb:write(
-    self.path,
+    self.loc.path,
     AnsiColor.new((":%d:%d: "):format(self.s_pos.line, self.s_pos.col)):Bright():tostring(),
     AnsiColor.new(ErrLoc.ErrLocKind_tostring(self.kind)):Red():Bright():tostring(),
     AnsiColor.new(" error: "):Red():Bright():tostring(),
@@ -64,6 +61,20 @@ function ErrLoc:tostring()
     "\n"
   )
   return sb:promote()
+end
+
+function ErrLoc.new(kind: ErrLocKind, loc: Loc, err: string, s_pos: Pos, e_pos: Pos): ErrLoc
+  range_check!(kind, ErrLocKind)
+  assert(err ~= "")
+
+  return {
+    kind = kind,
+
+    loc = loc,
+    err = err,
+    s_pos = s_pos,
+    e_pos = e_pos,
+  }
 end
 
 return ErrLoc

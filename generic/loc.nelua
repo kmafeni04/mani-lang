@@ -1,0 +1,6 @@
+local Loc = @record{
+  path: string,
+  content: string,
+}
+
+return Loc
