@@ -1,0 +1,30 @@
+local Parser = require "...libs.parser"
+local ErrLoc = require "...libs.errloc"
+
+do
+  local content = [[
+for i := 0, 10, 2 {
+  print(i)
+}
+]]
+
+  local new_parser_res = Parser.new("for_loop", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+
+  local ast = parser_res:get_ok()
+
+  local expected = [[
+AST
+  FOR_LOOP -> (ID_DECL -> i: TYPE i64 = LITERAL(0) ; LITERAL(10) ; LITERAL(2))
+    PROC_CALL print(
+      ID -> i: TYPE i64
+    )
+]]
+  local res = ast:tostring()
+  assert(expected == res)
+end

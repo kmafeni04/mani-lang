@@ -614,6 +614,29 @@ function Cgen:gen_id_decl(node: *Node): string
   return sb:promote()
 end
 
+function Cgen:gen_for_loop(node: *Node): string
+  assert(node and node.kind == NodeKind.FOR_LOOP)
+
+  local for_loop_gen = Cgen.new(node, self.parser, self.prefix)
+  for_loop_gen.sb_head = self.sb_head
+
+  local id_val: string = for_loop_gen:gen_id_decl(node.id)
+  id_val = id_val:sub(0, #id_val - 2)
+
+  local cond_val: string = self.prefix .. "_" .. node.id.name .. " <= " .. for_loop_gen:gen_expr(node.cond)
+
+  local step_val: string
+  if node.step then
+    step_val = self.prefix .. "_" .. node.id.name .. " += " .. for_loop_gen:gen_expr(node.step)
+  else
+    step_val = self.prefix .. "_" .. node.id.name .. "++"
+  end
+
+  local sb: stringbuilder
+  sb:write("for (", id_val, " " , cond_val, "; ", step_val, ") {\n", for_loop_gen:gen_scope(), "\n}")
+  return sb:promote()
+end
+
 Cgen.gen_scope = function(self: *Cgen): string
   local sb: stringbuilder
   for i, child in ipairs(self.scope.children) do
@@ -624,6 +647,7 @@ Cgen.gen_scope = function(self: *Cgen): string
         self:gen_proc_def(child)
         in ""
       end),
+      [NodeKind.FOR_LOOP] = self:gen_for_loop(child),
       [NodeKind.WHILE_LOOP] = self:gen_while_loop(child),
       [NodeKind.IF_STMT] = self:gen_if_stmt(child),
       [NodeKind.ELIF_STMT] = self:gen_elif_stmt(child),

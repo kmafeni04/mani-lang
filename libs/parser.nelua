@@ -1,3 +1,5 @@
+-- TODO: remove 'for _, param in ipairs(node.params) do' from cgen and put in parse_proc_def
+
 require "map-nelua.map"
 require "switch-nelua.switch"
 
@@ -395,8 +397,9 @@ Node = @record{
   op: Token,
   rhs: *Node,
 
-  -- WhileLoop
+  -- WhileLoop|ForLoop|IfStmt
   cond: *Node,
+  step: *Node,
 
   -- Literal
   lit_val: string,
@@ -458,7 +461,9 @@ function Node:tostring(indent: integer, inline: boolean): string
         if self.val then
           sb:write(" = ", self.val:tostring(indent, true))
         end
-        sb:write("\n")
+        if not inline then
+          sb:write("\n")
+        end
       end
     case NodeKind.LITERAL then
       sb:write("(")
@@ -520,9 +525,13 @@ function Node:tostring(indent: integer, inline: boolean): string
       )
     case NodeKind.COMMENT then
       sb:write("\n")
-    case NodeKind.ARRAY then
-      fallthrough
     case NodeKind.FOR_LOOP then
+      sb:write(" -> (", self.id:tostring(indent + 1, true), " ; " , self.cond:tostring(indent + 1, true))
+      if self.step then
+        sb:write(" ; ", self.step:tostring(indent + 1, true))
+      end
+      sb:write(")\n")
+    case NodeKind.ARRAY then
       fallthrough
     case NodeKind.INDEX then
       fallthrough
@@ -551,6 +560,7 @@ function Node:is_scope(): boolean
       NodeKind.AST,
       NodeKind.PROC_DEF,
       NodeKind.WHILE_LOOP,
+      NodeKind.FOR_LOOP,
       NodeKind.IF_STMT,
       NodeKind.ELIF_STMT,
       NodeKind.ELSE_STMT
@@ -1728,9 +1738,9 @@ function Parser:parse_while_loop(scope: *Node): ParseResult
     return ParseResult.err(expect_res:get_err())
   end
 
-  local while_stmt = new(Node)
+  local while_loop = new(Node)
 
-  $while_stmt = {
+  $while_loop = {
     kind = NodeKind.WHILE_LOOP,
     s_pos = {
       line = s_token.s_pos.line,
@@ -1743,7 +1753,7 @@ function Parser:parse_while_loop(scope: *Node): ParseResult
   }
 
   while not self:is({ TokenKind.CLOSE_CURLY }) do
-    parse_res = self:parse_scope(while_stmt, TokenKind.CLOSE_CURLY)
+    parse_res = self:parse_scope(while_loop, TokenKind.CLOSE_CURLY)
     if parse_res:is_err() then
       return parse_res
     else
@@ -1757,14 +1767,112 @@ function Parser:parse_while_loop(scope: *Node): ParseResult
   end
   local e_token = expect_res:get_ok()
 
-  while_stmt.e_index = e_token.e_index
-  while_stmt.e_pos = {
+  while_loop.e_index = e_token.e_index
+  while_loop.e_pos = {
     line = e_token.e_pos.line,
     col = e_token.e_pos.col,
   }
-  while_stmt.content = self.content:sub(while_stmt.s_index, while_stmt.e_index)
+  while_loop.content = self.content:sub(while_loop.s_index, while_loop.e_index)
 
-  return ParseResult.ok(while_stmt)
+  return ParseResult.ok(while_loop)
+end
+
+function Parser:parse_for_loop(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.KEYWORD_FOR)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local s_token = expect_res:get_ok()
+
+  local parse_res = self:parse_id_decl(scope)
+  if parse_res:is_err() then
+    return parse_res
+  end
+
+  local for_loop_id = parse_res:get_ok()
+  if not for_loop_id.type.is_integral then
+    error()
+  end
+
+  local expect_res = self:expect(TokenKind.COMMA)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  parse_res = self:parse_expr(scope)
+  if parse_res:is_err() then
+    return parse_res
+  end
+
+  local for_loop_cond = parse_res:get_ok()
+  if not for_loop_cond.type.is_integral then
+    error()
+  end
+
+  local for_loop_step: *Node
+  if self:is({ TokenKind.COMMA }) then
+    self:advance()
+    parse_res = self:parse_expr(scope)
+    if parse_res:is_err() then
+      return parse_res
+    end
+    for_loop_step = parse_res:get_ok()
+    if not for_loop_step.type.is_integral then
+      error()
+    end
+  end
+
+  expect_res = self:expect(TokenKind.OPEN_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  local for_loop = new(Node)
+
+  $for_loop = {
+    kind = NodeKind.FOR_LOOP,
+    s_pos = {
+      line = s_token.s_pos.line,
+      col = s_token.s_pos.col,
+    },
+    s_index = s_token.s_index,
+    scope = scope,
+
+    id = for_loop_id,
+    cond = for_loop_cond,
+    step = for_loop_step
+  }
+
+  for_loop.children:push(for_loop_id)
+
+  while not self:is({ TokenKind.CLOSE_CURLY }) do
+    parse_res = self:parse_scope(for_loop, TokenKind.CLOSE_CURLY)
+    if parse_res:is_err() then
+      return parse_res
+    else
+      break
+    end
+  end
+
+  -- First children is always the loop id
+  for_loop.children:remove(1)
+
+  expect_res = self:expect(TokenKind.CLOSE_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local e_token = expect_res:get_ok()
+
+  for_loop.e_index = e_token.e_index
+  for_loop.e_pos = {
+    line = e_token.e_pos.line,
+    col = e_token.e_pos.col,
+  }
+  for_loop.content = self.content:sub(for_loop.s_index, for_loop.e_index)
+
+  return ParseResult.ok(for_loop)
 end
 
 function Parser:parse_if_stmt(scope: *Node): ParseResult
@@ -2013,6 +2121,7 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
       }
       in ParseResult.ok(node)
     end),
+    [TokenKind.KEYWORD_FOR] = self:parse_for_loop(scope),
     _default = (do
       error(("Unexpected Tokenkind '%s'"):format(TokenKind_tostring(token.kind)))
       in ParseResult.err({})
