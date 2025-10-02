@@ -1,0 +1,6 @@
+proc add(a: i64, b: i64): i64{
+  return a + b
+}
+
+i := add(2, 4)
+print(i)

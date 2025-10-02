@@ -1,0 +1,10 @@
+a := 1
+
+if a <= 10 {
+  print("less than 10")
+} elif a >= 10 {
+  print("greater than 10")
+} else {
+  print("unreachable")
+}
+
