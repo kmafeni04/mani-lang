@@ -209,22 +209,7 @@ function Parser:expect_one_of(token_kinds: sequence(TokenKind), msg: string): Ex
     sb:write(" }' but got '", TokenKind_tostring(token.kind), "'")
   end
 
-  return ExpectResult.err{
-    path = self.path,
-    content = self.content,
-    s_index = token.s_index,
-    e_index = token.e_index,
-    err = sb:promote(),
-    kind = ErrLocKind.SYNTAX,
-    s_pos = {
-      line = token.s_pos.line,
-      col = token.s_pos.col,
-    },
-    e_pos = {
-      line = token.e_pos.line,
-      col = token.e_pos.col,
-    },
-  }
+  return ExpectResult.err(new_error(ErrLocKind.SYNTAX, self, sb:promote(), token, token))
 end
 
 function Parser:expect(token_kind: TokenKind, msg: string): ExpectResult
@@ -1646,6 +1631,8 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
         content = self.content,
         err = ("Return statement type '%s' does not match defined return type '%s'"):format(ret_stmt_val.type.name, proc_def.ret_t.name),
 
+        s_index = ret_stmt_val.s_index,
+        e_index = ret_stmt_val.e_index,
         s_pos = {
           line = ret_stmt_val.s_pos.line,
           col = ret_stmt_val.s_pos.col,
@@ -1654,8 +1641,6 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
           line = ret_stmt_val.e_pos.line,
           col = ret_stmt_val.e_pos.col,
         },
-        s_index = ret_stmt_val.s_index,
-        e_index = ret_stmt_val.e_index,
       })
     end
   end
