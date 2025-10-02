@@ -24,6 +24,7 @@ local TokenKind = @enum{
   CONSTANT_NIL,
   CONSTANT_TRUE,
   DOT,
+  ELSE,
   EOF,
   EQUALS,
   EQUATES,
@@ -33,6 +34,7 @@ local TokenKind = @enum{
   INTEGER,
   KEYWORD_BREAK,
   KEYWORD_ELIF,
+  KEYWORD_ELSE,
   KEYWORD_FOR,
   KEYWORD_IF,
   KEYWORD_PROC,
@@ -110,6 +112,8 @@ function tokenizer.TokenKind_tostring(kind: TokenKind): string
       return "break"
     case TokenKind.KEYWORD_ELIF then
       return "elif"
+    case TokenKind.KEYWORD_ELSE then
+      return "else"
     case TokenKind.KEYWORD_IF then
       return "if"
     case TokenKind.KEYWORD_FOR then
@@ -478,13 +482,14 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         ttype = TokenKind.KEYWORD_IF
       elseif word == "elif" then
         ttype = TokenKind.KEYWORD_ELIF
+      elseif word == "else" then
+        ttype = TokenKind.KEYWORD_ELSE
       elseif word == "for" then
         ttype = TokenKind.KEYWORD_FOR
       elseif word == "break" then
         ttype = TokenKind.KEYWORD_BREAK
       elseif word == "return" then
         ttype = TokenKind.KEYWORD_RETURN
-
       elseif word == "true" then
         ttype = TokenKind.CONSTANT_TRUE
       elseif word == "false" then

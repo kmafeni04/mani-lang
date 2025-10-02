@@ -539,6 +539,17 @@ function Cgen:gen_elif_stmt(node: *Node): string
   return sb:promote()
 end
 
+function Cgen:gen_else_stmt(node: *Node): string
+  assert(node and node.kind == NodeKind.ELSE_STMT)
+
+  local else_stmt_gen = Cgen.new(node, self.parser, self.prefix)
+  else_stmt_gen.sb_head = self.sb_head
+
+  local sb: stringbuilder
+  sb:write("else {\n", else_stmt_gen:gen_scope(), "\n}")
+  return sb:promote()
+end
+
 function Cgen:gen_id_decl(node: *Node): string
   assert(node and node.kind == NodeKind.ID_DECL)
 
@@ -616,6 +627,7 @@ Cgen.gen_scope = function(self: *Cgen): string
       [NodeKind.WHILE_LOOP] = self:gen_while_loop(child),
       [NodeKind.IF_STMT] = self:gen_if_stmt(child),
       [NodeKind.ELIF_STMT] = self:gen_elif_stmt(child),
+      [NodeKind.ELSE_STMT] = self:gen_else_stmt(child),
       [NodeKind.BREAK] = "break;\n",
       [NodeKind.ID_DECL] = (do
         local id_decl: string = self:gen_id_decl(child)

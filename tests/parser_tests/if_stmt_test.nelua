@@ -5,40 +5,14 @@ do
   local content = [[
 if true {
   print("hello world")
-}
-]]
-
-  local new_parser_res = Parser.new("if_stmt", content)
-  assert(new_parser_res:is_ok())
-
-  local parser = new_parser_res:get_ok()
-
-  local parser_res = parser:parse()
-  assert(parser_res:is_ok())
-
-  local ast = parser_res:get_ok()
-
-  local expected = [[
-AST
-  IF_STMT -> LITERAL(true)
-    PROC_CALL print(
-      LITERAL("hello world")
-    )
-]]
-  local res = ast:tostring()
-  assert(expected == res)
-end
-
-do
-  local content = [[
-if true {
-  print("hello world")
 } elif false {
   print("bye")
+} else {
+  print("UNREACHABLE")
 }
 ]]
 
-  local new_parser_res = Parser.new("if_elif_stmt", content)
+  local new_parser_res = Parser.new("if_elif_else_stmt", content)
   assert(new_parser_res:is_ok())
 
   local parser = new_parser_res:get_ok()
@@ -57,6 +31,10 @@ AST
   ELIF_STMT -> LITERAL(false)
     PROC_CALL print(
       LITERAL("bye")
+    )
+  ELSE_STMT
+    PROC_CALL print(
+      LITERAL("UNREACHABLE")
     )
 ]]
   local res = ast:tostring()

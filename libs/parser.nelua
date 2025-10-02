@@ -329,6 +329,7 @@ local NodeKind = @enum{
   BREAK,
   COMMENT,
   ELIF_STMT,
+  ELSE_STMT,
   FIELD,
   FOR_LOOP,
   ID,
@@ -495,6 +496,8 @@ function Node:tostring(indent: integer, inline: boolean): string
       sb:write(" -> ", self.id.name ,".", self.name, ": ", self.type:tostring(indent + 1, true))
     case NodeKind.WHILE_LOOP, NodeKind.IF_STMT, NodeKind.ELIF_STMT then
       sb:write(" -> ", self.cond:tostring(indent + 1, true), "\n")
+    case NodeKind.ELSE_STMT then
+      sb:write("\n")
     case NodeKind.BREAK then
       sb:write("\n")
     case NodeKind.BIN_EXPR then
@@ -548,7 +551,8 @@ function Node:is_scope(): boolean
       NodeKind.AST,
       NodeKind.PROC_DEF,
       NodeKind.IF_STMT,
-      NodeKind.ELIF_STMT
+      NodeKind.ELIF_STMT,
+      NodeKind.ELSE_STMT
     then
       return true
   end
@@ -1815,6 +1819,61 @@ function Parser:parse_elif_stmt(scope: *Node): ParseResult
   return ParseResult.ok(elif_stmt)
 end
 
+function Parser:parse_else_stmt(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.KEYWORD_ELSE)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local s_token = expect_res:get_ok()
+
+  if scope.children[#scope.children].kind ~= NodeKind.IF_STMT and scope.children[#scope.children].kind ~= NodeKind.ELIF_STMT then
+    return ParseResult.err(new_error(ErrLocKind.SYNTAX, self, "either if or elif statement expected before else", s_token, s_token))
+  end
+
+  expect_res = self:expect(TokenKind.OPEN_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  local else_stmt = new(Node)
+
+  $else_stmt = {
+    kind = NodeKind.ELSE_STMT,
+    s_pos = {
+      line = s_token.s_pos.line,
+      col = s_token.s_pos.col,
+    },
+    s_index = s_token.s_index,
+    scope = scope,
+  }
+
+  while not self:is({ TokenKind.CLOSE_CURLY }) do
+    local parse_res = self:parse_scope(else_stmt, TokenKind.CLOSE_CURLY)
+    if parse_res:is_err() then
+      return parse_res
+    else
+      break
+    end
+  end
+
+  expect_res = self:expect(TokenKind.CLOSE_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local e_token = expect_res:get_ok()
+
+  else_stmt.e_index = e_token.e_index
+  else_stmt.e_pos = {
+    line = e_token.e_pos.line,
+    col = e_token.e_pos.col,
+  }
+  else_stmt.content = self.content:sub(else_stmt.s_index, else_stmt.e_index)
+
+  return ParseResult.ok(else_stmt)
+end
+
 Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): ParseResult
   assert(scope and scope:is_scope())
   range_check!(till, TokenKind)
@@ -1858,6 +1917,7 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
     [TokenKind.KEYWORD_RETURN] = self:parse_return_node(scope),
     [TokenKind.KEYWORD_IF] = self:parse_if_stmt(scope),
     [TokenKind.KEYWORD_ELIF] = self:parse_elif_stmt(scope),
+    [TokenKind.KEYWORD_ELSE] = self:parse_else_stmt(scope),
     _default = (do
       error(("Unexpected Tokenkind '%s'"):format(TokenKind_tostring(token.kind)))
       in ParseResult.err({})
