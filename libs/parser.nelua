@@ -457,9 +457,13 @@ function Node:tostring(indent: integer, inline: boolean): string
       end
       sb:write(")\n")
     case NodeKind.ARRAY then
-      fallthrough
+      sb:write("[\n")
+      for i, field in ipairs(self.fields) do
+        sb:write(field:tostring(indent + 1), "\n")
+      end
+      sb:write(indent_str, "]")
     case NodeKind.INDEX then
-      fallthrough
+      sb:write(" -> ", self.id:tostring(indent + 1, true), " [", self.val:tostring(indent + 1, true) ,"]")
     case NodeKind.INIT_FIELD then
       fallthrough
     case NodeKind.INIT_LIST then
@@ -503,6 +507,34 @@ function Node:is_loop(): boolean
       return true
   end
   return false
+end
+
+local function new_array_type(scope: *Node, len: integer, sub_type: *Node, s_pos: Pos, e_pos: Pos): *Node
+  assert(scope and scope:is_scope())
+  assert(sub_type)
+
+
+  local array_type_name_sb: stringbuilder
+  array_type_name_sb:write("[", len, "]", sub_type.name)
+
+  local array_type = new(Node)
+
+  $array_type = {
+    kind = NodeKind.TYPE,
+
+    s_pos = s_pos,
+    e_pos = e_pos,
+    scope = scope,
+
+    name = array_type_name_sb:promote(),
+    type = array_type,
+    val = sub_type,
+    len = len,
+    is_array = true,
+    is_type = true,
+  }
+
+  return array_type
 end
 
 local type_type: Node = {
@@ -743,6 +775,7 @@ function Parser:check_node_type(typ: *Node, node: *Node): Option(ErrLoc)
 
   if typ.is_array and node.type.is_array then
     if typ.len >= node.type.len and typ.val == node.type.val then
+      $node.type = $typ
       return Option.None()
     end
   elseif typ.is_type_type and node.type.is_rec then
@@ -1009,16 +1042,141 @@ function Parser:parse_proc_call(scope: *Node): ParseResult
   local e_token = expect_res:get_ok()
 
   if index - 1 ~= #proc_type.params then
-    return ParseResult.err(new_error(
+    return ParseResult.err(ErrLoc.new(
       ErrLocKind.SEMANTIC,
-      self,
+      self.loc,
       ("proc '%s' is expecting '%d' argument(s) but got '%d'"):format(proc_call_name, #proc_type.params, index - 1),
-      s_token,
-      e_token
+      s_token.s_pos,
+      e_token.e_pos
     ))
   end
 
   return ParseResult.ok(self:new_proc_call(s_token, e_token, scope, proc_call_args, proc_type.ret_t))
+end
+
+function Parser:parse_array(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.OPEN_BRACKET)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local s_token = expect_res:get_ok()
+
+  local array_nodes: sequence(*Node)
+
+  while not self:is({ TokenKind.CLOSE_BRACKET }) do
+    local parse_res = self:parse_expr(scope)
+    if parse_res:is_err() then
+      return parse_res
+    end
+    local array_node = parse_res:get_ok()
+
+    if #array_nodes > 0 then
+      local err_loc_opt = self:check_node_type(array_nodes[1].type, array_node)
+      if err_loc_opt:is_some() then
+        return ParseResult.err(ErrLoc.new(
+          ErrLocKind.SEMANTIC,
+          self.loc,
+          "Array contains elements of different types",
+          array_node.s_pos,
+          array_node.e_pos
+        ))
+      end
+    end
+
+    array_nodes:push(array_node)
+
+    expect_res = self:advance_comma_unless(TokenKind.CLOSE_BRACKET)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
+  end
+
+  expect_res = self:expect(TokenKind.CLOSE_BRACKET)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local e_token = expect_res:get_ok()
+
+  local array_sub_type: *Node
+  if #array_nodes > 0 then
+    array_sub_type = array_nodes[1].type
+  else
+    assert(builtin_types:has("niltype"))
+    array_sub_type = builtin_types["niltype"]
+  end
+
+
+  local array_type = new_array_type(scope, #array_nodes, array_sub_type, s_token.s_pos, e_token.e_pos)
+
+  local array_node = new(Node)
+  $array_node = {
+    kind = NodeKind.ARRAY,
+    s_pos = s_token.s_pos,
+    e_pos = e_token.e_pos,
+    scope = scope,
+
+    type = array_type,
+    fields = array_nodes
+  }
+
+  return ParseResult.ok(array_node)
+end
+
+function Parser:parse_id_index(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local s_token = self:peek()
+
+  local parse_res = self:parse_id(scope)
+  if parse_res:is_err() then
+    return parse_res
+  end
+  local index_id = parse_res:get_ok()
+
+  if not index_id.type.is_array then
+    error()
+  end
+
+  local expect_res = self:expect(TokenKind.OPEN_BRACKET)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  parse_res = self:parse_expr(scope)
+  if parse_res:is_err() then
+    return parse_res
+  end
+  local index_val = parse_res:get_ok()
+  if not index_val.type.is_integral then
+    error()
+  end
+
+  if index_val.kind == NodeKind.LITERAL and tointeger(index_val.lit_val) > index_id.type.len then
+    error()
+  end
+
+  expect_res = self:expect(TokenKind.CLOSE_BRACKET)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local e_token = expect_res:get_ok()
+
+  local id_index = new(Node)
+  $id_index = {
+    kind = NodeKind.INDEX,
+
+    s_pos = s_token.s_pos,
+    e_pos = e_token.e_pos,
+    scope = scope,
+
+    type = index_id.type.val,
+    id = index_id,
+    val = index_val,
+  }
+
+  return ParseResult.ok(id_index)
 end
 
 function Parser:parse_primary(scope: *Node): ParseResult
@@ -1039,6 +1197,8 @@ function Parser:parse_primary(scope: *Node): ParseResult
   elseif self:is({ TokenKind.IDENTIFIER }) then
     if self:peek_next().kind == TokenKind.OPEN_PAREN then
       return self:parse_proc_call(scope)
+    elseif self:peek_next().kind == TokenKind.OPEN_BRACKET then
+      return self:parse_id_index(scope)
     end
     return self:parse_id(scope)
   elseif self:is({ TokenKind.OPEN_PAREN }) then
@@ -1057,6 +1217,8 @@ function Parser:parse_primary(scope: *Node): ParseResult
     local paren_expr = new(Node)
     $paren_expr = {}
     return ParseResult.ok(paren_expr)
+  elseif self:is({ TokenKind.OPEN_BRACKET }) then
+    return self:parse_array(scope)
   end
 
   print(token.val)
@@ -1203,6 +1365,37 @@ end
 function Parser:parse_type(scope: *Node): ParseResult
   assert(scope and scope:is_scope())
 
+  if self:is({ TokenKind.OPEN_BRACKET }) then
+    local s_token = self:advance()
+
+    -- TODO: Should also work with comptime values
+    local expect_res = self:expect(TokenKind.INTEGER)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
+    local array_len = tointeger(expect_res:get_ok().val)
+
+    local expect_res = self:expect(TokenKind.CLOSE_BRACKET)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
+
+    local parse_res = self:parse_type(scope)
+    if parse_res:is_err() then
+      return parse_res
+    end
+    local array_sub_type = parse_res:get_ok()
+
+    local array_type_name_sb: stringbuilder
+    array_type_name_sb:write("[", array_len, "]", array_sub_type.name)
+
+    local e_token = self:peek_prev()
+
+    local array_type = new(Node)
+
+    return ParseResult.ok(new_array_type(scope, array_len, array_sub_type, s_token.s_pos, e_token.e_pos))
+  end
+
   local token = self:peek()
   if not self:is({ TokenKind.IDENTIFIER }) then
     return ParseResult.err(error_unexpected_token(self, token))
@@ -1240,7 +1433,7 @@ function Parser:parse_id_decl(scope: *Node): ParseResult
   end
 
   local id_type: *Node
-  if self:is({ TokenKind.IDENTIFIER }) then
+  if self:is({ TokenKind.IDENTIFIER, TokenKind.OPEN_BRACKET }) then
     local parse_res = self:parse_type(scope)
     if parse_res:is_err() then
       return parse_res

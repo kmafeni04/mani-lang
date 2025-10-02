@@ -1,0 +1,39 @@
+local Parser = require "...libs.parser"
+local ErrLoc = require "...libs.errloc"
+
+do
+  local content = [[
+arr : [5]i64 = [1,2,3,4,5]
+
+for i := 0, 4 {
+  print(arr[i])
+}
+]]
+
+  local new_parser_res = Parser.new("for_loop", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+
+  local ast = parser_res:get_ok()
+
+  local expected = [[
+AST
+  ID_DECL -> arr: TYPE [5]i64 = ARRAY[
+    LITERAL(1)
+    LITERAL(2)
+    LITERAL(3)
+    LITERAL(4)
+    LITERAL(5)
+  ]
+  FOR_LOOP -> (ID_DECL -> i: TYPE i64 = LITERAL(0) ; LITERAL(4))
+    PROC_CALL print(
+      INDEX -> ID -> arr: TYPE [5]i64 [ID -> i: TYPE i64]
+    )
+]]
+  local res = ast:tostring()
+  assert(expected == res)
+end
