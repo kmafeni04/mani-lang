@@ -1,6 +1,15 @@
 proc add(a: i64, b: i64): i64{
-  return a + b
+  print(a + b)
+}
+add(2, 4)
+
+print()
+
+proc recurse(a: i64){
+  print(a)
+  if a < 20 {
+    recurse(a + 1)
+  }
 }
 
-i := add(2, 4)
-print(i)
+recurse(1)

@@ -114,15 +114,6 @@ function Cgen:gen_anon_proc_def(node: *Node)
   anon_func_count = anon_func_count + 1
   local sb: stringbuilder
 
-  for _, param in ipairs(node.params) do
-    for i, child in ipairs(node.children) do
-      if param == child then
-        node.children:remove(i)
-        break
-      end
-    end
-  end
-
   local ret_t = self:gen_type(node.ret_t)
 
   sb:write("typedef ", ret_t, " (*anon_func_", anon_func_count, "_type)(")
@@ -158,15 +149,6 @@ function Cgen:gen_proc_def(node: *Node)
   end
 
   local sb: stringbuilder
-
-  for _, param in ipairs(node.params) do
-    for i, child in ipairs(node.children) do
-      if param == child then
-        node.children:remove(i)
-        break
-      end
-    end
-  end
 
   local ret_t = self:gen_type(node.ret_t)
 
@@ -440,7 +422,7 @@ Cgen.gen_expr = function(self: *Cgen, node: *Node): string
       elseif node.type.is_boolean then
         in node.lit_val
       elseif node.type.is_niltype then
-        in node.lit_val
+        in lang_info.LANG_NAME:upper() .. "_NIL"
       else
         error(("Unhandled literal node type '%s'"):format(node.type.name))
       end

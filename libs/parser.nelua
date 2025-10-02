@@ -1580,47 +1580,6 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
 
   local proc_sig_end = self:peek_prev()
 
-  expect_res = self:expect(TokenKind.OPEN_CURLY)
-  if expect_res:is_err() then
-    return ParseResult.err(expect_res:get_err())
-  end
-
-  while not self:is({ TokenKind.CLOSE_CURLY }) do
-    local parse_res = self:parse_scope(proc_def, TokenKind.CLOSE_CURLY)
-    if parse_res:is_err() then
-      return parse_res
-    else
-      break
-    end
-  end
-
-  local rets: sequence(*Node)
-  get_returns(proc_def, &rets)
-  for _, ret in ipairs(rets) do
-    local ret_stmt_val = ret.val
-    if not proc_def.ret_t then
-      proc_def.ret_t = ret_stmt_val.type
-    end
-    if self:check_node_type(proc_def.ret_t, ret_stmt_val):is_some() then
-      return ParseResult.err({
-        path = self.path,
-        content = self.content,
-        s_index = ret_stmt_val.s_index,
-        e_index = ret_stmt_val.e_index,
-        err = ("Return statement type '%s' does not match defined return type '%s'"):format(ret_stmt_val.type, proc_def.ret_t),
-        kind = ErrLocKind.SEMANTIC,
-        s_pos = {
-          line = ret_stmt_val.s_pos.line,
-          col = ret_stmt_val.s_pos.col,
-        },
-        e_pos = {
-          line = ret_stmt_val.e_pos.line,
-          col = ret_stmt_val.e_pos.col,
-        },
-      })
-    end
-  end
-
   if not proc_def.ret_t then
     assert(builtin_types:has("niltype"))
     proc_def.ret_t = builtin_types["niltype"]
@@ -1661,11 +1620,61 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
   }
   proc_def.children:push(proc_id_decl)
 
+  expect_res = self:expect(TokenKind.OPEN_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  while not self:is({ TokenKind.CLOSE_CURLY }) do
+    local parse_res = self:parse_scope(proc_def, TokenKind.CLOSE_CURLY)
+    if parse_res:is_err() then
+      return parse_res
+    else
+      break
+    end
+  end
+
+  local rets: sequence(*Node)
+  get_returns(proc_def, &rets)
+  for _, ret in ipairs(rets) do
+    local ret_stmt_val = ret.val
+    if self:check_node_type(proc_def.ret_t, ret_stmt_val):is_some() then
+      return ParseResult.err({
+        kind = ErrLocKind.SEMANTIC,
+
+        path = self.path,
+        content = self.content,
+        err = ("Return statement type '%s' does not match defined return type '%s'"):format(ret_stmt_val.type.name, proc_def.ret_t.name),
+
+        s_pos = {
+          line = ret_stmt_val.s_pos.line,
+          col = ret_stmt_val.s_pos.col,
+        },
+        e_pos = {
+          line = ret_stmt_val.e_pos.line,
+          col = ret_stmt_val.e_pos.col,
+        },
+        s_index = ret_stmt_val.s_index,
+        e_index = ret_stmt_val.e_index,
+      })
+    end
+  end
+
   expect_res = self:expect(TokenKind.CLOSE_CURLY)
   if expect_res:is_err() then
     return ParseResult.err(expect_res:get_err())
   end
   token = expect_res:get_ok()
+
+  for _, param in ipairs(proc_def.params) do
+    for i, child in ipairs(proc_def.children) do
+      if param == child then
+        proc_def.children:remove(i)
+        break
+      end
+    end
+  end
+  proc_def.children:remove(1)
 
   proc_def.e_index = token.e_index
   proc_def.e_pos = {
