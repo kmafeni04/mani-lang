@@ -550,9 +550,20 @@ function Node:is_scope(): boolean
     case
       NodeKind.AST,
       NodeKind.PROC_DEF,
+      NodeKind.WHILE_LOOP,
       NodeKind.IF_STMT,
       NodeKind.ELIF_STMT,
       NodeKind.ELSE_STMT
+    then
+      return true
+  end
+  return false
+end
+
+function Node:is_loop(): boolean
+  switch self.kind do
+    case
+      NodeKind.WHILE_LOOP
     then
       return true
   end
@@ -1697,6 +1708,65 @@ function Parser:parse_return_node(scope: *Node): ParseResult
   return ParseResult.ok(node)
 end
 
+function Parser:parse_while_loop(scope: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local expect_res = self:expect(TokenKind.KEYWORD_WHILE)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local s_token = expect_res:get_ok()
+
+  local parse_res = self:parse_expr(scope)
+  if parse_res:is_err() then
+    return parse_res
+  end
+  local while_cond = parse_res:get_ok()
+
+  expect_res = self:expect(TokenKind.OPEN_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  local while_stmt = new(Node)
+
+  $while_stmt = {
+    kind = NodeKind.WHILE_LOOP,
+    s_pos = {
+      line = s_token.s_pos.line,
+      col = s_token.s_pos.col,
+    },
+    s_index = s_token.s_index,
+    scope = scope,
+
+    cond = while_cond
+  }
+
+  while not self:is({ TokenKind.CLOSE_CURLY }) do
+    parse_res = self:parse_scope(while_stmt, TokenKind.CLOSE_CURLY)
+    if parse_res:is_err() then
+      return parse_res
+    else
+      break
+    end
+  end
+
+  expect_res = self:expect(TokenKind.CLOSE_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local e_token = expect_res:get_ok()
+
+  while_stmt.e_index = e_token.e_index
+  while_stmt.e_pos = {
+    line = e_token.e_pos.line,
+    col = e_token.e_pos.col,
+  }
+  while_stmt.content = self.content:sub(while_stmt.s_index, while_stmt.e_index)
+
+  return ParseResult.ok(while_stmt)
+end
+
 function Parser:parse_if_stmt(scope: *Node): ParseResult
   assert(scope and scope:is_scope())
 
@@ -1918,6 +1988,32 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
     [TokenKind.KEYWORD_IF] = self:parse_if_stmt(scope),
     [TokenKind.KEYWORD_ELIF] = self:parse_elif_stmt(scope),
     [TokenKind.KEYWORD_ELSE] = self:parse_else_stmt(scope),
+    [TokenKind.KEYWORD_WHILE] = self:parse_while_loop(scope),
+    [TokenKind.KEYWORD_BREAK] = (do
+      -- TODO: Assert that break is the child of a loop
+      self:advance()
+      if not scope:is_loop() then
+        return ParseResult.err(new_error(ErrLocKind.SEMANTIC, self, "break statements must be within a loop", token, token))
+      end
+      local node: *Node = new(Node)
+      $node = {
+        kind = NodeKind.BREAK,
+
+        s_pos = {
+          line = token.s_pos.line,
+          col = token.s_pos.col,
+        },
+        e_pos = {
+          line = token.e_pos.line,
+          col = token.e_pos.col,
+        },
+        s_index = token.s_index,
+        e_index = token.e_index,
+
+        scope = scope,
+      }
+      in ParseResult.ok(node)
+    end),
     _default = (do
       error(("Unexpected Tokenkind '%s'"):format(TokenKind_tostring(token.kind)))
       in ParseResult.err({})
