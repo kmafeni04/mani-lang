@@ -1,0 +1,23 @@
+
+record X {
+  name: string,
+  age: i64,
+  hobbies: [2]string
+}
+
+print(X, "\n")
+
+x : X = { name = "james", age = 10, hobbies = ["sports", "watching tv"] }
+
+print(x, x.name, x.name.len, x.age, x.hobbies, x.hobbies[0], "\n")
+
+proc make_x(): X{
+  return { name = "jack", age = 20, hobbies = ["drawing", "running"] }
+}
+
+xs : [3]X = [x, { name = "john", age = 15, hobbies = ["cars", "video games"] }, make_x()]
+
+for i := 0, 2 {
+  print(i + 1, xs[i])
+}
+

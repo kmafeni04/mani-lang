@@ -47,7 +47,7 @@ local anon_rec_count = 0
 local string_eq_func_used: boolean
 local string_eq_func = ([[
 bool %s_eq_string(%s_string a, %s_string b) {
-  return a.size == b.size && (a.data == b.data || a.size == 0 || memcmp(a.data, b.data, a.size) == 0);
+  return a.len == b.len && (a.data == b.data || a.len == 0 || memcmp(a.data, b.data, a.len) == 0);
 }
 ]]):format(lang_info.LANG_NAME, lang_info.LANG_NAME, lang_info.LANG_NAME)
 
@@ -118,20 +118,22 @@ function Cgen:gen_anon_proc_def(node: *Node)
 
   sb:write("typedef ", ret_t, " (*anon_func_", anon_func_count, "_type)(")
   if #node.params > 0 then
-    for _, param in ipairs(node.params) do
-      sb:write(self:gen_type(param.type), " ", param.name, ", ")
+    for i, param in ipairs(node.params) do
+      sb:write(self:gen_type(param.type), " ", param.name)
+      if i < #node.params then
+        sb:write(", ")
+      end
     end
-    sb:rollback(2)
   else
     sb:write("void")
   end
   sb:write(");\n\n")
   sb:write(ret_t, " anon_func_", anon_func_count, "(")
-  if #node.params > 0 then
-    for _, param in ipairs(node.params) do
-      sb:write(self:gen_type(param.type), " ", param.name, ", ")
+  for i, param in ipairs(node.params) do
+    sb:write(self:gen_type(param.type), " ", param.name)
+    if i < #node.params then
+      sb:write(", ")
     end
-    sb:rollback(2)
   end
   sb:write(") {\n") -- Cgen.gen_scope runs before the write of "{\n" so it was seperated
   sb:write(self:gen_scope(), "};\n\n")
@@ -158,19 +160,19 @@ function Cgen:gen_proc_def(node: *Node)
   proc_gen.sb_head = self.sb_head
 
   sb:write("typedef ", ret_t, " (*", name, "_type)(")
-  if #node.params > 0 then
-    for _, param in ipairs(node.params) do
-      sb:write(proc_gen:gen_type(param.type), " ", self.prefix, "_", param.name, ", ")
+  for i, param in ipairs(node.params) do
+    sb:write(proc_gen:gen_type(param.type), " ", self.prefix, "_", param.name)
+    if i < #node.params then
+      sb:write(", ")
     end
-    sb:rollback(2)
   end
   sb:write(");\n\n")
   sb:write(ret_t, " ", name, "(")
-  if #node.params > 0 then
-    for _, param in ipairs(node.params) do
-      sb:write(proc_gen:gen_type(param.type), " ", self.prefix, "_", param.name, ", ")
+  for i, param in ipairs(node.params) do
+    sb:write(proc_gen:gen_type(param.type), " ", self.prefix, "_", param.name)
+    if i < #node.params then
+      sb:write(", ")
     end
-    sb:rollback(2)
   end
   sb:write(") {\n") -- Cgen.gen_scope runs before the write of "{\n" so it was seperated
   sb:write(proc_gen:gen_scope(), "};\n\n")
@@ -189,12 +191,12 @@ local function print_arg_snippet(print_arg: string, t: *Node): string
       sb:write(
         "if(",
         print_arg,
-        ".size > 0) {\n",
+        ".len > 0) {\n",
         "fwrite(",
         print_arg,
         ".data, 1, ",
         print_arg,
-        '.size, stdout);\n} else { fputs("", stdout); }\n'
+        '.len, stdout);\n} else { fputs("", stdout); }\n'
       )
       in nil
     end),
@@ -216,37 +218,23 @@ local function print_arg_snippet(print_arg: string, t: *Node): string
     end),
     [t.is_array] = (do
       sb:write('fputs("[", stdout);\n')
-      local print_comma = 'fputs(",", stdout);\n'
-      if t.len > 0 then
-        for j = 1, t.len do
-          if t.val.is_string then
-            sb:write('fputs("\\"", stdout);\n')
-          end
-          sb:write(print_arg_snippet(print_arg .. "[" .. j-1 .. "]", t.val))
-          if t.val.is_string then
-            sb:write('fputs("\\"", stdout);\n')
-          end
-          sb:write(print_comma)
+      for i = 1, t.len do
+        if t.val.is_string then
+          sb:write('fputs("\\"", stdout);\n')
         end
-        sb:rollback(#print_comma)
+        sb:write(print_arg_snippet(print_arg .. "[" .. i-1 .. "]", t.val))
+        if t.val.is_string then
+          sb:write('fputs("\\"", stdout);\n')
+        end
+        if i < t.len then
+          sb:write('fputs(",", stdout);\n')
+        end
       end
       sb:write('fputs("]", stdout);\n')
       in nil
     end),
     [t.is_boolean] = (do
       sb:write('fputs(', print_arg, ' ? "true" : "false", stdout);\n')
-      in nil
-    end),
-    [t.kind == NodeKind.ID] = (do
-      -- sb:write()
-      sb:write('fputs("{ ", stdout);\n')
-      for i = 1, #t.type.fields do
-        local field = t.type.fields[i]
-        sb:write('fputs("', field.name, ' = ", stdout);\n')
-        sb:write(print_arg_snippet(print_arg .. "." .. field.name, field.type))
-        sb:write('fputs(", ", stdout);\n')
-      end
-      sb:write('fputs("}", stdout);\n')
       in nil
     end),
     [t.is_rec] = (do
@@ -259,7 +247,19 @@ local function print_arg_snippet(print_arg: string, t: *Node): string
       in nil
     end),
     _default = (do
-      error(("TODO: Unhandled arg type '%s'"):format(t.name))
+      error(("TODO: Unhandled arg type '%s'"):format(t:tostring()))
+      in nil
+    end),
+    [t.type.is_rec] = (do
+      -- sb:write()
+      sb:write('fputs("{ ", stdout);\n')
+      for i = 1, #t.type.fields do
+        local field = t.type.fields[i]
+        sb:write('fputs("', field.name, ' = ", stdout);\n')
+        sb:write(print_arg_snippet(print_arg .. "." .. field.name, field.type))
+        sb:write('fputs(", ", stdout);\n')
+      end
+      sb:write('fputs("}", stdout);\n')
       in nil
     end),
   })
@@ -277,19 +277,20 @@ function Cgen:gen_print(node: *Node): string
 
   if # node.args > 0 then
     for i, arg in ipairs(node.args) do
-      if arg.is_type then
+      if arg.is_type_id then
         assert(builtin_types:has("niltype"))
-        sb:write(builtin_types["niltype"].name , " a", i)
+        sb:write(lang_info.LANG_NAME, "_", builtin_types["niltype"].name , " a", i)
       else
         sb:write(self:gen_type(arg.type), " a", i)
         if arg.type.is_array then
           sb:write(" [", arg.type.len, "] ")
         end
       end
-      sb:write(", ")
+      if i < #node.args then
+        sb:write(", ")
+      end
       print_args_sb:write(arg.type, ", ")
     end
-    sb:rollback(2)
   end
   local print_funcs_i = 0
   for i, v in ipairs(print_funcs) do
@@ -303,13 +304,12 @@ function Cgen:gen_print(node: *Node): string
     print_funcs:push(print_args_sb:promote())
     sb:write(") {\n")
 
-    if #node.args > 0 then
-      for i, arg in ipairs(node.args) do
-        sb:write(print_arg_snippet("a" .. i, arg.type))
-        sb:write("fflush(stdout);\n")
+    for i, arg in ipairs(node.args) do
+      sb:write(print_arg_snippet("a" .. i, arg.type))
+      sb:write("fflush(stdout);\n")
+      if i < #node.args then
         sb:write('fputs("\\t", stdout);\n')
       end
-      sb:rollback(#('fputs("\\t", stdout);\n'))
     end
     sb:write('fputs("\\n", stdout);\n')
     sb:write("};\n\n")
@@ -317,16 +317,15 @@ function Cgen:gen_print(node: *Node): string
   end
   local print_sb: stringbuilder
   print_sb:write(lang_info.LANG_NAME, "_print_", print_funcs_i > 0 and print_funcs_i or #print_funcs, "(")
-  if #node.args > 0 then
-    for _, arg in ipairs(node.args) do
-      if arg.is_type then
-        print_sb:write(lang_info.LANG_NAME:upper(), "_NIL")
-      else
-        print_sb:write(self:gen_expr(arg))
-      end
+  for i, arg in ipairs(node.args) do
+    if arg.is_type_id then
+      print_sb:write(lang_info.LANG_NAME:upper(), "_NIL")
+    else
+      print_sb:write(self:gen_expr(arg))
+    end
+    if i < #node.args then
       print_sb:write(", ")
     end
-    print_sb:rollback(2)
   end
 
   print_sb:write(")")
@@ -338,11 +337,11 @@ function Cgen:gen_proc_call(node: *Node): string
 
   local sb: stringbuilder
   sb:write(self.prefix, "_", node.name, "(")
-  if #node.args > 0 then
-    for _, arg in ipairs(node.args) do
-      sb:write(self:gen_expr(arg), ", ")
+  for i, arg in ipairs(node.args) do
+    sb:write(self:gen_expr(arg))
+    if i < #node.args then
+      sb:write(", ")
     end
-    sb:rollback(2)
   end
   sb:write(")")
   return sb:promote()
@@ -351,11 +350,11 @@ end
 function Cgen:gen_array(node: *Node): string
   local sb: stringbuilder
   sb:write("{")
-  if # node.fields > 0 then
-    for _: integer, v: *Node in ipairs(node.fields) do
-      sb:write(self:gen_expr(v), ",")
+  for i, v in ipairs(node.fields) do
+    sb:write(self:gen_expr(v))
+    if i < #node.fields then
+      sb:write(", ")
     end
-    sb:rollback(1)
   end
   sb:write("}")
   return sb:promote()
@@ -406,7 +405,7 @@ Cgen.gen_expr = function(self: *Cgen, node: *Node): string
   local str: string = _switch!(node.kind, {
     [NodeKind.PROC_CALL] = (do
       local proc_call_sb: stringbuilder
-      local id: Option(*Node) = Parser.find_id_decl_up_scope(self.scope, node.name, node.s_pos.index)
+      local id: Option(*Node) = Parser.find_decl_up_scope(self.scope, node.name, node.s_pos.index)
       if not (id:is_some() and id:get_some().name == "print") and node.name == "print" then
         proc_call_sb:write(self:gen_print(node))
       else
@@ -444,7 +443,7 @@ Cgen.gen_expr = function(self: *Cgen, node: *Node): string
     [NodeKind.INDEX] = (do
       -- TODO: Bounds checking
       local index_sb: stringbuilder
-      index_sb:write(self:gen_expr(node.id), "[", self:gen_expr(node.val), "]")
+      index_sb:write(self:gen_expr(node.parent), "[", self:gen_expr(node.val), "]")
       in index_sb:promote()
     end),
     [NodeKind.TYPE] = (do
@@ -458,9 +457,8 @@ Cgen.gen_expr = function(self: *Cgen, node: *Node): string
       in ""
     end),
     [NodeKind.INIT_LIST] = (do
-      -- TODO: Bounds checking
       local init_list_sb: stringbuilder
-      init_list_sb:write("{")
+      init_list_sb:write("(", self.prefix, "_", node.type.name , ")", "{")
       for i = 1, #node.fields do
         local field = node.fields[i]
         init_list_sb:write(" .", field.name, " = ", self:gen_expr(field.val), ", ")
@@ -470,7 +468,7 @@ Cgen.gen_expr = function(self: *Cgen, node: *Node): string
     end),
     [NodeKind.FIELD] = (do
       local field_sb: stringbuilder
-      field_sb:write(self:gen_expr(node.id), ".", node.name)
+      field_sb:write(self:gen_expr(node.parent), ".", node.name)
       in field_sb:promote()
     end),
     _default = (do
@@ -575,20 +573,12 @@ function Cgen:gen_id_decl(node: *Node): string
       sb:write(self:gen_type(node.type) , " ", name, "[", node.type.len, "] = ", final_value, ";\n")
       in nil
     end),
-    [node.type.is_rec] = (do
-      if node.type.is_anonymous then
-        sb:write("typedef anon_rec_", anon_rec_count, " ", name, ";\n")
-      elseif not node.is_type_decl then
-        sb:write("typedef ", self.prefix , "_", node.type.name, " ", name, ";\n")
-      end
-      in nil
-    end),
-    [node.type.kind == NodeKind.ID] = (do
+    [node.type.type.is_type] = (do
       sb:write(self.prefix, "_", node.type.name, " ", name, " = ", final_value , ";\n")
       in nil
     end),
     _default = (do
-      error(("Unhandled node type '%s'"):format(node.type.name))
+      error(("Unhandled node type '%s'"):format(node.type:tostring()))
       in nil
     end),
   })
@@ -731,7 +721,7 @@ function Cgen:final(): string
 
 typedef struct {
   char* data;
-  uint64_t size;
+  uint64_t len;
 } %s_string;
 
 typedef struct {} %s_niltype;

@@ -317,6 +317,8 @@ Node = @record{
 
   id: *Node,
 
+  parent: *Node,
+
   -- BinOp
   lhs: *Node,
   op: Token,
@@ -348,9 +350,10 @@ Node = @record{
   is_proc: boolean,
   is_niltype: boolean,
   is_any: boolean,
+  -- is_vararg: boolean,
   is_type_type: boolean,
 
-  is_type_decl: boolean,
+  is_type_id: boolean,
 
   is_rec: boolean,
   is_type: boolean,
@@ -371,24 +374,20 @@ function Node:tostring(indent: integer, inline: boolean): string
 
   local indent_str = string.rep("  ", indent)
   local sb: stringbuilder
-  if not self.is_type_decl then
-    if not inline then
-      sb:write(indent_str)
-    end
-    sb:write(NodeKind_tostring(self.kind))
+  if not inline then
+    sb:write(indent_str)
   end
+  sb:write(NodeKind_tostring(self.kind))
   switch self.kind do
     case NodeKind.AST then
       sb:write("\n")
     case NodeKind.ID_DECL then
-      if not self.is_type_decl then
-        sb:write(" -> ", self.name, ": ", self.type:tostring(indent, true))
-        if self.val then
-          sb:write(" = ", self.val:tostring(indent, true))
-        end
-        if not inline then
-          sb:write("\n")
-        end
+      sb:write(" -> ", self.name, ": ", self.type:tostring(indent, true))
+      if self.val then
+        sb:write(" = ", self.val:tostring(indent, true))
+      end
+      if not inline then
+        sb:write("\n")
       end
     case NodeKind.LITERAL then
       sb:write("(")
@@ -423,7 +422,7 @@ function Node:tostring(indent: integer, inline: boolean): string
       end
       sb:write("\n", indent_str ,")\n")
     case NodeKind.FIELD then
-      sb:write(" -> ", self.id.name ,".", self.name, ": ", self.type:tostring(indent + 1, true))
+      sb:write(" -> ", self.name, ": ", self.type:tostring(indent + 1, true))
     case NodeKind.WHILE_LOOP, NodeKind.IF_STMT, NodeKind.ELIF_STMT then
       sb:write(" -> ", self.cond:tostring(indent + 1, true), "\n")
     case NodeKind.ELSE_STMT then
@@ -463,11 +462,15 @@ function Node:tostring(indent: integer, inline: boolean): string
       end
       sb:write(indent_str, "]")
     case NodeKind.INDEX then
-      sb:write(" -> ", self.id:tostring(indent + 1, true), " [", self.val:tostring(indent + 1, true) ,"]")
-    case NodeKind.INIT_FIELD then
-      fallthrough
+      sb:write(" -> ", self.parent:tostring(indent + 1, true), " [", self.val:tostring(indent + 1, true) ,"]")
     case NodeKind.INIT_LIST then
-      fallthrough
+      sb:write(" {\n")
+      for i, field in ipairs(self.fields) do
+        sb:write(field:tostring(indent + 1), "\n")
+      end
+      sb:write("}")
+    case NodeKind.INIT_FIELD then
+      sb:write(" -> ", self.name, " = ", self.val:tostring(indent + 1, true))
     case NodeKind.PROC_DEF then
       fallthrough
     case NodeKind.RETURN then
@@ -509,6 +512,154 @@ function Node:is_loop(): boolean
   return false
 end
 
+local ParseResult = @Result(*Node, ErrLoc)
+
+local Parser.parse_expr: function(self: *Parser, scope: *Node): ParseResult
+local Parser.parse_scope: function(self: *Parser, scope: *Node, till: TokenKind): ParseResult
+local Parser.check_node_type: function(self: *Parser, typ: *Node, node: *Node): Option(ErrLoc)
+local Parser.parse_primary: function(self: *Parser, scope: *Node, current_node: *Node): ParseResult
+
+local type_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "type",
+  is_builtin = true,
+  is_type_type = true,
+  is_type = true,
+}
+type_type.type = &type_type
+
+local i64_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "i64",
+  is_builtin = true,
+  is_scalar = true,
+  is_integral = true,
+  is_i64 = true,
+  is_type = true,
+  type = &type_type
+}
+
+local f64_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "f64",
+  is_builtin = true,
+  is_scalar = true,
+  is_float = true,
+  is_f64 = true,
+  is_type = true,
+  type = &type_type
+}
+
+local u64_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "u64",
+  is_builtin = true,
+  is_scalar = true,
+  is_integral = true,
+  is_u64 = true,
+  is_type = true,
+  type = &type_type
+}
+
+local u8_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "u8",
+  is_builtin = true,
+  is_scalar = true,
+  is_integral = true,
+  is_u8 = true,
+  is_type = true,
+  type = &type_type
+}
+
+local string_data_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "*[0]u8",
+  val = &u8_type,
+  len = 0,
+  is_array = true,
+  is_unbounded = true,
+  is_type = true,
+  type = &type_type
+}
+
+local string_data: Node = {
+  kind = NodeKind.ID_DECL,
+  name = "data",
+  type = &string_data_type,
+}
+
+local string_len: Node = {
+  kind = NodeKind.ID_DECL,
+  name = "len",
+  type = &u64_type,
+}
+
+local string_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "string",
+  is_builtin = true,
+  is_string = true,
+  is_rec = true,
+  is_anonymous = true,
+  fields = {
+    &string_data,
+    &string_len,
+  },
+  is_type = true
+}
+string_type.type = &string_type
+
+local niltype_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "niltype",
+  is_builtin = true,
+  is_niltype = true,
+  is_type = true,
+  type = &type_type
+}
+
+local boolean_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "boolean",
+  is_builtin = true,
+  is_boolean = true,
+  is_type = true,
+  type = &type_type
+}
+
+local any_type: Node = {
+  kind = NodeKind.TYPE,
+  name = "any",
+  is_builtin = true,
+  is_any = true,
+  is_type = true,
+  type = &type_type
+}
+
+-- local vararg_type: Node = {
+--   kind = NodeKind.TYPE,
+--   name = "vararg",
+--   is_builtin = true,
+--   is_vararg = true,
+--   is_type = true
+-- }
+-- vararg_type.type = &vararg_type
+
+local Np = @*Node
+local builtin_types = map!(string, Np, {
+  [type_type.name] = &type_type,
+  [i64_type.name] = &i64_type,
+  [f64_type.name] = &f64_type,
+  [u64_type.name] = &u64_type,
+  [u8_type.name] = &u8_type,
+  [string_type.name] = &string_type,
+  [boolean_type.name] = &boolean_type,
+  [niltype_type.name] = &niltype_type,
+  [any_type.name] = &any_type,
+  -- [vararg_type.name] = &vararg_type,
+})
+
 local function new_array_type(scope: *Node, len: integer, sub_type: *Node, s_pos: Pos, e_pos: Pos): *Node
   assert(scope and scope:is_scope())
   assert(sub_type)
@@ -527,146 +678,16 @@ local function new_array_type(scope: *Node, len: integer, sub_type: *Node, s_pos
     scope = scope,
 
     name = array_type_name_sb:promote(),
-    type = array_type,
     val = sub_type,
     len = len,
     is_array = true,
     is_type = true,
+    type = &type_type
   }
 
   return array_type
 end
 
-local type_type: Node = {
-  kind = NodeKind.TYPE,
-  name = "type",
-  is_builtin = true,
-  is_type_type = true,
-  is_type = true
-}
-type_type.type = &type_type
-
-local i64_type: Node = {
-  kind = NodeKind.TYPE,
-  name = "i64",
-  is_builtin = true,
-  is_scalar = true,
-  is_integral = true,
-  is_i64 = true,
-  is_type = true
-}
-i64_type.type = &i64_type
-
-local f64_type: Node = {
-  kind = NodeKind.TYPE,
-  name = "f64",
-  is_builtin = true,
-  is_scalar = true,
-  is_float = true,
-  is_f64 = true,
-  is_type = true
-}
-f64_type.type = &f64_type
-
-local u64_type: Node = {
-  kind = NodeKind.TYPE,
-  name = "u64",
-  is_builtin = true,
-  is_scalar = true,
-  is_integral = true,
-  is_u64 = true,
-  is_type = true
-}
-u64_type.type = &u64_type
-
-local u8_type: Node = {
-  kind = NodeKind.TYPE,
-  name = "u8",
-  is_builtin = true,
-  is_scalar = true,
-  is_integral = true,
-  is_u8 = true,
-  is_type = true
-}
-u8_type.type = &u8_type
-
-local string_data_type: Node = {
-  kind = NodeKind.TYPE,
-  name = "*[0]u8",
-  val = &u8_type,
-  len = 0,
-  is_array = true,
-  is_unbounded = true,
-  is_type = true
-}
-string_data_type.type = &string_data_type
-
-local string_data: Node = {
-  kind = NodeKind.ID_DECL,
-  name = "data",
-  type = &string_data_type,
-}
-
-local string_size: Node = {
-  kind = NodeKind.ID_DECL,
-  name = "size",
-  type = &u64_type,
-}
-
-local string_type: Node = {
-  kind = NodeKind.TYPE,
-  name = "string",
-  is_builtin = true,
-  is_string = true,
-  is_rec = true,
-  is_anonymous = true,
-  fields = {
-    &string_data,
-    &string_size,
-  },
-  is_type = true
-}
-string_type.type = &string_type
-
-local niltype_type: Node = {
-  kind = NodeKind.TYPE,
-  name = "niltype",
-  is_builtin = true,
-  is_niltype = true,
-  is_type = true
-}
-niltype_type.type = &niltype_type
-
-local boolean_type: Node = {
-  kind = NodeKind.TYPE,
-  name = "boolean",
-  is_builtin = true,
-  is_boolean = true,
-  is_type = true
-}
-boolean_type.type = &boolean_type
-
-local any_type: Node = {
-  kind = NodeKind.TYPE,
-  name = "any",
-  is_builtin = true,
-  is_any = true,
-  is_type = true
-}
-any_type.type = &any_type
-
-local Np = @*Node
-local builtin_types = map!(string, Np, {
-  [type_type.name] = &type_type,
-  [i64_type.name] = &i64_type,
-  [f64_type.name] = &f64_type,
-  [u64_type.name] = &u64_type,
-  [u8_type.name] = &u8_type,
-  [string_type.name] = &string_type,
-  [boolean_type.name] = &boolean_type,
-  [niltype_type.name] = &niltype_type,
-  [any_type.name] = &any_type,
-})
 
 local BinOpInfo = @record{
   op: TokenKind,
@@ -714,14 +735,39 @@ local bin_ops = map!(TokenKind, BinOpInfo, {
   },
 })
 
-local BuiltinProc = @enum{
-  _UNDEFINED = 0,
-  PRINT,
-  _COUNT
+-- error("TODO: print_node")
+
+local print_param: Node = {
+  kind = NodeKind.ID_DECL,
+
+  -- type = &vararg_type,
+  name = "...",
 }
 
-local builtin_procs = map!(string, BuiltinProc, {
-  ["print"] = BuiltinProc.PRINT,
+local print_proc_type: Node
+print_proc_type = {
+  kind = NodeKind.TYPE,
+  name = "proc_def",
+  is_proc = true,
+  is_type = true,
+  params = { &print_param },
+  ret_t = &niltype_type,
+  type = &print_proc_type
+}
+
+-- NOTE: Hack to make proc available in scope
+local print_proc_id_decl: Node = {
+  kind = NodeKind.ID_DECL,
+
+  is_builtin = true,
+
+  name = "print",
+  -- val = proc_def,
+  type = &print_proc_type,
+}
+
+local builtin_procs = map!(string, Np, {
+  ["print"] = &print_proc_id_decl,
 })
 
 function Parser:new_literal(scope: *Node, n_type: *Node): *Node
@@ -744,47 +790,79 @@ function Parser:new_literal(scope: *Node, n_type: *Node): *Node
   return node
 end
 
-function Parser:check_node_type(typ: *Node, node: *Node): Option(ErrLoc)
-  assert(typ and (typ.kind == NodeKind.TYPE or (typ.kind == NodeKind.ID and typ.type.kind == NodeKind.TYPE)))
+function Parser:check_rec_fields(typ: *Node, init_list: *Node): Option(ErrLoc)
+  assert(typ and typ.is_rec)
+  assert(init_list and init_list.kind == NodeKind.INIT_LIST)
+
+  local t_fields: hashmap(string, *Node)
+  for _, field in ipairs(typ.fields) do
+    t_fields[field.name] = field
+  end
+
+  for _, field in ipairs(init_list.fields) do
+    local ok, t_field = t_fields:has_and_get(field.name)
+    if not ok then
+      return Option.Some(ErrLoc.new(
+        ErrLocKind.SEMANTIC,
+        self.loc,
+        ("field '%s' is not present in record '%s'"):format(field.name, typ.name),
+        field.s_pos,
+        field.e_pos
+      ))
+    end
+
+    local err_loc_opt = self:check_node_type(t_field.type, field.val)
+    if err_loc_opt:is_some() then
+      return Option.Some(err_loc_opt:get_some())
+    end
+  end
+
+  return Option.None()
+end
+
+Parser.check_node_type = function(self: *Parser, t: *Node, node: *Node): Option(ErrLoc)
+  assert(t and (t.kind == NodeKind.TYPE or (t.kind == NodeKind.ID and t.type.kind == NodeKind.TYPE)))
   assert(node)
 
-  -- if node.kind == NodeKind.INIT_LIST then
-  --   if typ.kind == NodeKind.ID and typ.type.is_rec then
-  --     return self:check_rec_fields(typ, node)
-  --   else
-  --     return Option.Some(ErrLoc{
-  --       kind = ErrLocKind.SEMANTIC,
+  local typ = t.is_type and t or t.type
 
-  --       path = self.path,
-  --       content = self.content,
-  --       err = ("type '%s' cannot be initialized using an initializer list"):format(typ.name),
+  if node.kind == NodeKind.INIT_LIST then
+    if typ.is_rec then
+      local err_loc_opt = self:check_rec_fields(typ, node)
+      if err_loc_opt:is_some() then
+        return err_loc_opt
+      end
+      node.type = typ
+      return Option.None()
+    else
+      return Option.Some(ErrLoc.new(
+        ErrLocKind.SEMANTIC,
+        self.loc,
+        ("type '%s' cannot be initialized using an initializer list"):format(typ.name),
+        node.s_pos,
+        node.e_pos
+      ))
+    end
+  end
 
-  --       s_index = node.s_index,
-  --       e_index = node.e_index,
-  --       s_pos = {
-  --         line = node.s_pos.line,
-  --         col = node.s_pos.col,
-  --       },
-  --       e_pos = {
-  --         line = node.e_pos.line,
-  --         col = node.e_pos.col,
-  --       },
-  --     })
-  --   end
-  -- end
+  local node_type = node.type.is_type and node.type or node.type.type
 
-  if typ.is_array and node.type.is_array then
-    if typ.len >= node.type.len and typ.val == node.type.val then
+  if typ.is_array and node_type.is_array then
+    if typ.len >= node_type.len then
+      local err_loc_opt = self:check_node_type(typ.val.type, node_type.val )
+      if err_loc_opt:is_some() then
+        return err_loc_opt
+      end
       $node.type = $typ
       return Option.None()
     end
-  elseif typ.is_type_type and node.type.is_rec then
-    $typ = $node.type
+  elseif typ.is_type_type and node_type.is_rec then
+    $typ = $node_type
     return Option.None()
   elseif typ.is_any then
     return Option.None()
   else
-    if typ == node.type then
+    if typ == node_type then
       return Option.None()
     end
   end
@@ -793,7 +871,7 @@ function Parser:check_node_type(typ: *Node, node: *Node): Option(ErrLoc)
     kind = ErrLocKind.SEMANTIC,
 
     loc = self.loc,
-    err = ("Type '%s' does not match type '%s'"):format(node.type.name, typ.name),
+    err = ("Type '%s' does not match type '%s'"):format(node_type.name, typ.name),
 
     s_pos = node.s_pos,
     e_pos = node.e_pos,
@@ -852,20 +930,19 @@ function Parser:new_binary_expr(scope: *Node, lhs: *Node, op: Token, rhs: *Node)
   return binary_expr
 end
 
-function Parser:new_proc_call(s_token: Token, e_token: Token, scope: *Node, args: sequence(*Node), proc_type: *Node): *Node
-  range_check!(s_token.kind, TokenKind)
-  range_check!(e_token.kind, TokenKind)
+function Parser:new_proc_call(scope: *Node, s_pos: Pos, e_pos: Pos, name: string, args: sequence(*Node), proc_type: *Node): *Node
   assert(scope and scope:is_scope())
   assert(proc_type)
 
   local proc_call = new(Node)
   $proc_call = {
     kind = NodeKind.PROC_CALL,
-    s_pos = s_token.s_pos,
-    e_pos = e_token.e_pos,
+
+    s_pos = s_pos,
+    e_pos = e_pos,
     scope = scope,
 
-    name = s_token.val,
+    name = name,
     args = args,
     type = proc_type,
   }
@@ -873,26 +950,25 @@ function Parser:new_proc_call(s_token: Token, e_token: Token, scope: *Node, args
   return proc_call
 end
 
-local ParseResult = @Result(*Node, ErrLoc)
-
-function Parser.find_id_decl_up_scope(scope: *Node, name: string, s_index: integer): Option(*Node)
+function Parser.find_decl_up_scope(scope: *Node, name: string, s_index: integer): Option(*Node)
   assert(scope and scope:is_scope())
 
   for _, node in ipairs(scope.children) do
-    if (node.kind == NodeKind.ID_DECL or node.kind == NodeKind.PROC_DEF) and node.name == name and node.s_pos.index <= s_index then
+    if (
+      node.kind == NodeKind.ID_DECL
+      or node.kind == NodeKind.PROC_DEF
+      or (node.kind == NodeKind.TYPE and not node.is_builtin)
+    ) and node.name == name and node.s_pos.index <= s_index then
       node.used = true
       return Option.Some(node)
     end
   end
 
   if scope.scope then
-    return Parser.find_id_decl_up_scope(scope.scope, name, s_index)
+    return Parser.find_decl_up_scope(scope.scope, name, s_index)
   end
   return Option.None()
 end
-
-local Parser.parse_expr: function(self: *Parser, scope: *Node): ParseResult
-local Parser.parse_scope: function(self: *Parser, scope: *Node, till: TokenKind): ParseResult
 
 function Parser:parse_id(scope: *Node): ParseResult
   local expect_res = self:expect(TokenKind.IDENTIFIER)
@@ -901,8 +977,12 @@ function Parser:parse_id(scope: *Node): ParseResult
   end
   local token = expect_res:get_ok()
 
-  local id_decl_opt: Option(*Node) = Parser.find_id_decl_up_scope(scope, token.val, token.s_pos.index)
-  if id_decl_opt:is_none() then
+  if builtin_procs:has(token.val) then
+    return ParseResult.ok(builtin_procs[token.val])
+  end
+
+  local decl_opt: Option(*Node) = Parser.find_decl_up_scope(scope, token.val, token.s_pos.index)
+  if decl_opt:is_none() then
     return ParseResult.err({
       loc = self.loc,
       err = ("Undeclared identifier '%s'"):format(token.val),
@@ -912,28 +992,27 @@ function Parser:parse_id(scope: *Node): ParseResult
     })
   end
 
-  local id_decl_node = id_decl_opt:get_some()
+  local decl_node = decl_opt:get_some()
 
-  local node: *Node = new(Node)
-  $node = {
+  local id_type: *Node = decl_node.is_type and decl_node or decl_node.type
+
+  local id: *Node = new(Node)
+  $id = {
     kind = NodeKind.ID,
     s_pos = token.s_pos,
     e_pos = token.e_pos,
 
     name = token.val,
-    type = id_decl_node.type,
+    type = id_type,
+    is_type_id = decl_node.is_type,
     scope = scope,
   }
-  return ParseResult.ok(node)
+  return ParseResult.ok(id)
 end
 
-function Parser:parse_print(scope: *Node, token: Token): ParseResult
+function Parser:parse_print(scope: *Node, parent: *Node): ParseResult
   assert(scope and scope:is_scope())
-  range_check!(token.kind, TokenKind)
-
-  local s_token = token
-
-  assert(s_token.val == "print")
+  assert(parent)
 
   local expect_res = self:expect(TokenKind.OPEN_PAREN)
   if expect_res:is_err() then
@@ -962,50 +1041,42 @@ function Parser:parse_print(scope: *Node, token: Token): ParseResult
   local e_token = expect_res:get_ok()
 
   assert(builtin_types:has("niltype"))
-  return ParseResult.ok(self:new_proc_call(s_token, e_token, scope, print_args, builtin_types["niltype"]))
+  return ParseResult.ok(self:new_proc_call(scope, parent.s_pos, e_token.e_pos, "print", print_args, builtin_types["niltype"]))
 end
 
-function Parser:parse_proc_call(scope: *Node): ParseResult
+function Parser:parse_proc_call(scope: *Node, parent: *Node): ParseResult
   assert(scope and scope:is_scope())
+  assert(parent and parent.type.is_proc)
 
-  local expect_res = self:expect(TokenKind.IDENTIFIER)
-  if expect_res:is_err() then
-    return ParseResult.err(expect_res:get_err())
-  end
-  local s_token = expect_res:get_ok()
-  local token = s_token
-  local proc_call_name = token.val
-
-  if builtin_procs:has(proc_call_name) then
-    if builtin_procs[proc_call_name] == BuiltinProc.PRINT then
-      return self:parse_print(scope, s_token)
+  if builtin_procs:has(parent.name) then
+    local proc = builtin_procs[parent.name]
+    if proc == &print_proc_id_decl then
+      return self:parse_print(scope, proc)
     else
-      error(("Unhandled builtin proc '%s'"):format(proc_call_name))
+      error(("Unhandled builtin proc '%s'"):format(parent.name))
     end
   end
 
-  local proc_id_decl_opt = Parser.find_id_decl_up_scope(scope, token.val, token.s_pos.index)
-  if proc_id_decl_opt:is_none() then
-    return ParseResult.err(error_undefined_identifier(self, token))
-  end
+  -- local proc_id_decl_opt = Parser.find_decl_up_scope(scope, token.val, token.s_pos.index)
+  -- if proc_id_decl_opt:is_none() then
+  --   return ParseResult.err(error_undefined_identifier(self, token))
+  -- end
 
-  local proc_id_decl = proc_id_decl_opt:get_some()
-  if not proc_id_decl.type.is_proc then
-    return ParseResult.err(ErrLoc.new(
-      ErrLocKind.SYNTAX,
-      self.loc,
-      ("Identifier '%s' is not a function"):format(proc_id_decl.name),
-      token.s_pos,
-      token.e_pos)
-    )
-  end
+  -- local proc_id_decl = proc_id_decl_opt:get_some()
+  -- if not proc_id_decl.type.is_proc then
+  --   return ParseResult.err(ErrLoc.new(
+  --     ErrLocKind.SYNTAX,
+  --     self.loc,
+  --     ("Identifier '%s' is not a function"):format(proc_id_decl.name),
+  --     token.s_pos,
+  --     token.e_pos)
+  --   )
+  -- end
 
-  expect_res = self:expect(TokenKind.OPEN_PAREN)
+  local expect_res = self:expect(TokenKind.OPEN_PAREN)
   if expect_res:is_err() then
     return ParseResult.err(expect_res:get_err())
   end
-
-  local proc_type = proc_id_decl.type
 
   local index = 1
   local proc_call_args: sequence(*Node)
@@ -1016,11 +1087,11 @@ function Parser:parse_proc_call(scope: *Node): ParseResult
     end
     local arg = parse_res:get_ok()
 
-    if index > #proc_type.params then
+    if index > #parent.type.params then
       error("Unexpected argument")
     end
 
-    local err_loc_opt = self:check_node_type(proc_type.params[index].type, arg)
+    local err_loc_opt = self:check_node_type(parent.type.params[index].type, arg)
     if err_loc_opt:is_some() then
       return ParseResult.err(err_loc_opt:get_some())
     end
@@ -1041,17 +1112,17 @@ function Parser:parse_proc_call(scope: *Node): ParseResult
   end
   local e_token = expect_res:get_ok()
 
-  if index - 1 ~= #proc_type.params then
+  if index - 1 ~= #parent.type.params then
     return ParseResult.err(ErrLoc.new(
       ErrLocKind.SEMANTIC,
       self.loc,
-      ("proc '%s' is expecting '%d' argument(s) but got '%d'"):format(proc_call_name, #proc_type.params, index - 1),
-      s_token.s_pos,
+      ("proc '%s' is expecting '%d' argument(s) but got '%d'"):format(parent.name, #parent.type.params, index - 1),
+      parent.s_pos,
       e_token.e_pos
     ))
   end
 
-  return ParseResult.ok(self:new_proc_call(s_token, e_token, scope, proc_call_args, proc_type.ret_t))
+  return ParseResult.ok(self:new_proc_call(scope, parent.s_pos, e_token.e_pos, parent.name, proc_call_args, parent.type.ret_t))
 end
 
 function Parser:parse_array(scope: *Node): ParseResult
@@ -1124,27 +1195,16 @@ function Parser:parse_array(scope: *Node): ParseResult
   return ParseResult.ok(array_node)
 end
 
-function Parser:parse_id_index(scope: *Node): ParseResult
+function Parser:parse_index(scope: *Node, parent: *Node): ParseResult
   assert(scope and scope:is_scope())
-
-  local s_token = self:peek()
-
-  local parse_res = self:parse_id(scope)
-  if parse_res:is_err() then
-    return parse_res
-  end
-  local index_id = parse_res:get_ok()
-
-  if not index_id.type.is_array then
-    error()
-  end
+  assert(parent and parent.type.is_array)
 
   local expect_res = self:expect(TokenKind.OPEN_BRACKET)
   if expect_res:is_err() then
     return ParseResult.err(expect_res:get_err())
   end
 
-  parse_res = self:parse_expr(scope)
+  local parse_res = self:parse_expr(scope)
   if parse_res:is_err() then
     return parse_res
   end
@@ -1153,7 +1213,7 @@ function Parser:parse_id_index(scope: *Node): ParseResult
     error()
   end
 
-  if index_val.kind == NodeKind.LITERAL and tointeger(index_val.lit_val) > index_id.type.len then
+  if index_val.kind == NodeKind.LITERAL and tointeger(index_val.lit_val) > parent.type.len then
     error()
   end
 
@@ -1163,67 +1223,221 @@ function Parser:parse_id_index(scope: *Node): ParseResult
   end
   local e_token = expect_res:get_ok()
 
-  local id_index = new(Node)
-  $id_index = {
+  local index = new(Node)
+  $index = {
     kind = NodeKind.INDEX,
 
-    s_pos = s_token.s_pos,
+    s_pos = parent.s_pos,
     e_pos = e_token.e_pos,
     scope = scope,
 
-    type = index_id.type.val,
-    id = index_id,
+    type = parent.type.val,
+    parent = parent,
     val = index_val,
   }
 
-  return ParseResult.ok(id_index)
+  if self:is({ TokenKind.DOT, TokenKind.OPEN_BRACKET, TokenKind.OPEN_PAREN }) then
+    return self:parse_primary(scope, index)
+  end
+
+  return ParseResult.ok(index)
 end
 
-function Parser:parse_primary(scope: *Node): ParseResult
+function Parser:parse_init_list(scope: *Node): ParseResult
   assert(scope and scope:is_scope())
 
-  local token = self:peek()
-  if self:is({ TokenKind.CONSTANT_FALSE, TokenKind.CONSTANT_TRUE }) then
-    return ParseResult.ok(self:new_literal(scope, builtin_types["boolean"]))
-  elseif self:is({ TokenKind.INTEGER }) then
-    return ParseResult.ok(self:new_literal(scope, builtin_types["i64"]))
-  elseif self:is({ TokenKind.FLOAT }) then
-    return ParseResult.ok(self:new_literal(scope, builtin_types["f64"]))
-  elseif self:is({ TokenKind.STRING }) then
-    --TODO: Not checking if this is correct since I want to keep track of string size
-    return ParseResult.ok(self:new_literal(scope, builtin_types["string"]))
-  elseif self:is({ TokenKind.CONSTANT_NIL }) then
-    return ParseResult.ok(self:new_literal(scope, builtin_types["niltype"]))
-  elseif self:is({ TokenKind.IDENTIFIER }) then
-    if self:peek_next().kind == TokenKind.OPEN_PAREN then
-      return self:parse_proc_call(scope)
-    elseif self:peek_next().kind == TokenKind.OPEN_BRACKET then
-      return self:parse_id_index(scope)
-    end
-    return self:parse_id(scope)
-  elseif self:is({ TokenKind.OPEN_PAREN }) then
-    local parse_res = self:parse_expr(scope)
-    if parse_res:get_err() then
-      return parse_res
-    end
-    local expr = parse_res:get_ok()
-    local expect_res = self:expect(TokenKind.CLOSE_PAREN)
+  local expect_res = self:expect(TokenKind.OPEN_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local s_token = expect_res:get_ok()
+
+  local init_list_fields: sequence(*Node)
+  while not self:is({ TokenKind.CLOSE_CURLY }) do
+    expect_res = self:expect(TokenKind.IDENTIFIER)
     if expect_res:is_err() then
       return ParseResult.err(expect_res:get_err())
     end
-    local e_token = expect_res:get_ok()
+    local token = expect_res:get_ok()
+    local init_field_name = token.val
 
-    error("PAREN_EXPR")
-    local paren_expr = new(Node)
-    $paren_expr = {}
-    return ParseResult.ok(paren_expr)
-  elseif self:is({ TokenKind.OPEN_BRACKET }) then
-    return self:parse_array(scope)
+    expect_res = self:expect(TokenKind.EQUALS)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
+
+    local parse_res = self:parse_expr(scope)
+    if parse_res:is_err() then
+      return parse_res
+    end
+    local init_field_val = parse_res:get_ok()
+
+    local init_field_node: *Node = new(Node)
+    $init_field_node = {
+      kind = NodeKind.INIT_FIELD,
+
+      s_pos = token.s_pos,
+      e_pos = init_field_val.e_pos,
+
+      scope = scope,
+
+      name = init_field_name,
+      val = init_field_val
+    }
+
+    init_list_fields:push(init_field_node)
+
+    expect_res = self:advance_comma_until(TokenKind.CLOSE_CURLY)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
   end
 
-  print(token.val)
-  error("Unexpected")
-  return
+  expect_res = self:expect(TokenKind.CLOSE_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local e_token = expect_res:get_ok()
+
+  local init_list_node = new(Node)
+  $init_list_node = {
+    kind = NodeKind.INIT_LIST,
+
+    s_pos = s_token.s_pos,
+    e_pos = e_token.e_pos,
+
+    scope = scope,
+
+    fields = init_list_fields
+  }
+
+  return ParseResult.ok(init_list_node)
+end
+
+function Parser:parse_field(scope: *Node, parent: *Node): ParseResult
+  assert(scope and scope:is_scope())
+  assert(parent and parent.type.type.is_rec)
+
+  local parent_type: *Node = parent.type.is_rec and parent.type or parent.type.type
+
+  local expect_res = self:expect(TokenKind.DOT)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local s_token = expect_res:get_ok()
+
+  expect_res = self:expect(TokenKind.IDENTIFIER)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local token = expect_res:get_ok()
+  local field_name = token.val
+
+  local found_field: *Node
+  for _, field in ipairs(parent_type.fields) do
+    if field.name == field_name then
+      found_field = field
+      break
+    end
+  end
+
+  if not found_field then
+    return ParseResult.err(ErrLoc.new(
+      ErrLocKind.SEMANTIC,
+      self.loc,
+      ("Unknown field '%s' for type '%s'"):format(field_name, parent_type.name),
+      token.s_pos,
+      token.e_pos
+    ))
+  end
+
+  local field = new(Node)
+  $field = {
+    kind = NodeKind.FIELD,
+
+    s_pos = s_token.s_pos,
+    e_pos = token.e_pos,
+
+    scope = scope,
+
+    parent = parent,
+    name = field_name,
+    type = found_field.type
+  }
+
+  if self:is({ TokenKind.DOT, TokenKind.OPEN_BRACKET, TokenKind.OPEN_PAREN }) then
+    return self:parse_primary(scope, field)
+  end
+
+  return ParseResult.ok(field)
+end
+
+Parser.parse_primary = function(self: *Parser, scope: *Node, current_node: *Node): ParseResult
+  assert(scope and scope:is_scope())
+
+  local parse_res: ParseResult
+  if not current_node then
+    local token = self:peek()
+    parse_res = (do
+      if self:is({ TokenKind.CONSTANT_FALSE, TokenKind.CONSTANT_TRUE }) then
+        in ParseResult.ok(self:new_literal(scope, builtin_types["boolean"]))
+      elseif self:is({ TokenKind.INTEGER }) then
+        in ParseResult.ok(self:new_literal(scope, builtin_types["i64"]))
+      elseif self:is({ TokenKind.FLOAT }) then
+        in ParseResult.ok(self:new_literal(scope, builtin_types["f64"]))
+      elseif self:is({ TokenKind.STRING }) then
+        --TODO: Not checking if this is correct since I want to keep track of string size
+        in ParseResult.ok(self:new_literal(scope, builtin_types["string"]))
+      elseif self:is({ TokenKind.CONSTANT_NIL }) then
+        in ParseResult.ok(self:new_literal(scope, builtin_types["niltype"]))
+      elseif self:is({ TokenKind.IDENTIFIER }) then
+        in self:parse_id(scope)
+      elseif self:is({ TokenKind.OPEN_PAREN }) then
+        local parse_res = self:parse_expr(scope)
+        if parse_res:get_err() then
+          in parse_res
+        end
+        local expr = parse_res:get_ok()
+        local expect_res = self:expect(TokenKind.CLOSE_PAREN)
+        if expect_res:is_err() then
+          in ParseResult.err(expect_res:get_err())
+        end
+        local e_token = expect_res:get_ok()
+
+        error("TODO: PAREN_EXPR")
+        local paren_expr = new(Node)
+        $paren_expr = {}
+        in ParseResult.ok(paren_expr)
+      elseif self:is({ TokenKind.OPEN_BRACKET }) then
+        in self:parse_array(scope)
+      elseif self:is({ TokenKind.OPEN_CURLY }) then
+        in self:parse_init_list(scope)
+      else
+        in ParseResult.err(error_unexpected_token(self, token))
+      end
+    end)
+
+    if parse_res:is_err() then
+      return parse_res
+    end
+
+    current_node = parse_res:get_ok()
+  end
+
+  if current_node and current_node.type then
+    local typ: *Node = current_node.type
+    if typ.type.is_rec and self:is({ TokenKind.DOT }) then
+      return self:parse_field(scope, current_node)
+    elseif typ.is_proc and self:is({ TokenKind.OPEN_PAREN }) then
+      return self:parse_proc_call(scope, current_node)
+    elseif typ.is_array and self:is({ TokenKind.OPEN_BRACKET }) then
+      return self:parse_index(scope, current_node)
+    else
+      parse_res = ParseResult.ok(current_node)
+    end
+  end
+
+  return parse_res
 end
 
 function Parser:parse_unary(scope: *Node): ParseResult
@@ -1405,13 +1619,25 @@ function Parser:parse_type(scope: *Node): ParseResult
     if builtin_types:has(token.val) then
       self:advance()
       return ParseResult.ok(builtin_types[token.val])
+    else
+      local parse_res = self:parse_id(scope)
+      if parse_res:is_err() then
+        return parse_res
+      end
+      local id = parse_res:get_ok()
+
+      if not id.type.is_type then
+        error()
+      end
+
+      return ParseResult.ok(id)
     end
   end
 
   return ParseResult.err(error_unexpected_token(self, token))
 end
 
-function Parser:parse_id_decl(scope: *Node): ParseResult
+function Parser:parse_id_decl(scope: *Node, in_rec: boolean): ParseResult
   assert(scope and scope:is_scope())
 
   local expect_res = self:expect(TokenKind.IDENTIFIER)
@@ -1422,9 +1648,11 @@ function Parser:parse_id_decl(scope: *Node): ParseResult
   local token = s_token
   local id_name = token.val
 
-  local id_opt = Parser.find_id_decl_up_scope(scope, id_name, token.s_pos.index)
-  if id_opt:is_some() then
-    return ParseResult.err(error_redeclaration(self, token))
+  if not in_rec then
+    local decl_opt = Parser.find_decl_up_scope(scope, id_name, token.s_pos.index)
+    if decl_opt:is_some() then
+      return ParseResult.err(error_redeclaration(self, token))
+    end
   end
 
   expect_res = self:expect(TokenKind.COLON)
@@ -1561,8 +1789,8 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
   end
   local proc_def_name = expect_res:get_ok().val
 
-  local id_opt = Parser.find_id_decl_up_scope(scope, proc_def_name, token.s_pos.index)
-  if id_opt:is_some() then
+  local decl_opt = Parser.find_decl_up_scope(scope, proc_def_name, token.s_pos.index)
+  if decl_opt:is_some() then
     return ParseResult.err(error_redeclaration(self, token))
   end
 
@@ -1631,7 +1859,7 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
     is_type = true,
     params = proc_def.params,
     ret_t = proc_def.ret_t,
-    type = proc_type
+    type = &type_type
   }
   proc_def.type = proc_type
 
@@ -2030,6 +2258,69 @@ function Parser:parse_else_stmt(scope: *Node): ParseResult
   return ParseResult.ok(else_stmt)
 end
 
+function Parser:parse_record(scope: *Node): ParseResult
+
+  local expect_res = self:expect(TokenKind.KEYWORD_RECORD)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local s_token = expect_res:get_ok()
+
+  expect_res = self:expect(TokenKind.IDENTIFIER)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local token = expect_res:get_ok()
+  local record_name = token.val
+
+  local decl_opt = Parser.find_decl_up_scope(scope, record_name, token.s_pos.index)
+  if decl_opt:is_some() then
+    return ParseResult.err(error_redeclaration(self, token))
+  end
+
+  expect_res = self:expect(TokenKind.OPEN_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+
+  local record_fields: sequence(*Node)
+  while not self:is({ TokenKind.CLOSE_CURLY }) do
+    local parse_res = self:parse_id_decl(scope, true)
+    if parse_res:is_err() then
+      return parse_res
+    end
+
+    record_fields:push(parse_res:get_ok())
+
+    expect_res = self:advance_comma_until(TokenKind.CLOSE_CURLY)
+    if expect_res:is_err() then
+      return ParseResult.err(expect_res:get_err())
+    end
+  end
+
+  expect_res = self:expect(TokenKind.CLOSE_CURLY)
+  if expect_res:is_err() then
+    return ParseResult.err(expect_res:get_err())
+  end
+  local e_token = expect_res:get_ok()
+
+  local record_node = new(Node)
+  $record_node = {
+    kind = NodeKind.TYPE,
+
+    s_pos = s_token.s_pos,
+    e_pos = e_token.e_pos,
+    scope = scope,
+
+    name = record_name,
+    fields = record_fields,
+    is_rec = true,
+    is_type = true,
+    type = &type_type
+  }
+  return ParseResult.ok(record_node)
+end
+
 Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): ParseResult
   assert(scope and scope:is_scope())
   range_check!(till, TokenKind)
@@ -2055,7 +2346,7 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
       if self:peek_next().kind == TokenKind.COLON then
         in self:parse_id_decl(scope)
       elseif self:peek_next().kind == TokenKind.OPEN_PAREN then
-        in self:parse_proc_call(scope)
+        in self:parse_primary(scope)
       elseif self:peek_next().kind == TokenKind.EQUALS then
         in self:parse_assignment(scope)
       end
@@ -2067,6 +2358,8 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
     [TokenKind.KEYWORD_ELIF] = self:parse_elif_stmt(scope),
     [TokenKind.KEYWORD_ELSE] = self:parse_else_stmt(scope),
     [TokenKind.KEYWORD_WHILE] = self:parse_while_loop(scope),
+    [TokenKind.KEYWORD_RECORD] = self:parse_record(scope),
+    [TokenKind.KEYWORD_FOR] = self:parse_for_loop(scope),
     [TokenKind.KEYWORD_BREAK] = (do
       self:advance()
       if not scope:is_loop() then
@@ -2083,7 +2376,6 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
       }
       in ParseResult.ok(node)
     end),
-    [TokenKind.KEYWORD_FOR] = self:parse_for_loop(scope),
     _default = (do
       error(("Unexpected Tokenkind '%s'"):format(TokenKind_tostring(token.kind)))
       in ParseResult.err({})
