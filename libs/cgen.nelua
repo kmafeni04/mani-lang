@@ -241,9 +241,12 @@ local function print_arg_snippet(print_arg: string, t: *Node): string
       sb:write('fputs("', t.name, "{ ")
       for i = 1, #t.fields do
         local field = t.fields[i]
-        sb:write(field.name, ": ", field.type.name, ", ")
+        sb:write(field.name, ": ", field.type.name)
+        if i > 1 and i < #t.fields then
+          sb:write(", ")
+        end
       end
-      sb:write('}", stdout);\n')
+      sb:write(' }", stdout);\n')
       in nil
     end),
     _default = (do
@@ -257,9 +260,11 @@ local function print_arg_snippet(print_arg: string, t: *Node): string
         local field = t.type.fields[i]
         sb:write('fputs("', field.name, ' = ", stdout);\n')
         sb:write(print_arg_snippet(print_arg .. "." .. field.name, field.type))
-        sb:write('fputs(", ", stdout);\n')
+        if i > 1 and i < #t.type.fields then
+          sb:write('fputs(", ", stdout);\n')
+        end
       end
-      sb:write('fputs("}", stdout);\n')
+      sb:write('fputs(" }", stdout);\n')
       in nil
     end),
   })
@@ -436,6 +441,9 @@ Cgen.gen_expr = function(self: *Cgen, node: *Node): string
     end),
     [NodeKind.ARRAY] = self:gen_array(node),
     [NodeKind.ID] = (do
+      if node.is_type_id then
+        in ""
+      end
       local id_sb: stringbuilder
       id_sb:write(self.prefix, "_", node.name)
       in id_sb:promote()
@@ -472,7 +480,7 @@ Cgen.gen_expr = function(self: *Cgen, node: *Node): string
       in field_sb:promote()
     end),
     _default = (do
-      error(("Unexpected expr node kind: '%s'"):format(NodeKind_tostring(node.kind)))
+      error(("Unexpected expr node: '%s'"):format(node:tostring()))
       in ""
     end),
   })
@@ -573,11 +581,20 @@ function Cgen:gen_id_decl(node: *Node): string
       sb:write(self:gen_type(node.type) , " ", name, "[", node.type.len, "] = ", final_value, ";\n")
       in nil
     end),
-    [node.type.type.is_type] = (do
-      sb:write(self.prefix, "_", node.type.name, " ", name, " = ", final_value , ";\n")
+    [node.type.is_type] = (do
+      self.sb_head:write("typedef ", self.prefix, "_", node.type.name, " ", self.prefix, "_", node.name, ";\n")
+      in nil
+    end),
+    [node.type.is_type_id] = (do
+      if node.val and node.val.is_type_id then
+        self.sb_head:write("typedef ", self.prefix, "_", node.type.name, " ", self.prefix, "_", node.name, ";\n")
+      else
+        sb:write(self.prefix, "_", node.type.name, " ", name, " = ", final_value , ";\n")
+      end
       in nil
     end),
     _default = (do
+      -- pr
       error(("Unhandled node type '%s'"):format(node.type:tostring()))
       in nil
     end),

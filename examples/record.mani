@@ -1,4 +1,3 @@
-
 record X {
   name: string,
   age: i64,
@@ -21,3 +20,11 @@ for i := 0, 2 {
   print(i + 1, xs[i])
 }
 
+Y : <const> = X
+
+print(Y)
+
+y : Y = { name = "james", age = 10, hobbies = ["sports", "watching tv"] }
+
+print(y, "\n")
+print(y.name, y.name.len, y.age, y.hobbies, y.hobbies[0])

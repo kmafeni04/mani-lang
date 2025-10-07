@@ -1002,11 +1002,14 @@ function Parser:parse_id(scope: *Node): ParseResult
     s_pos = token.s_pos,
     e_pos = token.e_pos,
 
+    scope = scope,
+
     name = token.val,
     type = id_type,
-    is_type_id = decl_node.is_type,
-    scope = scope,
+    is_type_id = (decl_node.is_type or (decl_node.val and decl_node.val.is_type_id)),
+    annotations = decl_node.annotations
   }
+
   return ParseResult.ok(id)
 end
 
@@ -1637,6 +1640,39 @@ function Parser:parse_type(scope: *Node): ParseResult
   return ParseResult.err(error_unexpected_token(self, token))
 end
 
+local AnnotationsResult = @Result(Annotations, ErrLoc)
+
+function Parser:parse_annotations(): AnnotationsResult
+  local annotations: Annotations
+
+  local expect_res = self:expect(TokenKind.OPEN_ANGLE)
+  if expect_res:is_err() then
+    return AnnotationsResult.err(expect_res:get_err())
+  end
+
+  while not self:is({ TokenKind.CLOSE_ANGLE }) do
+    local token = self:advance()
+
+    if token.val == "const" then
+      annotations.constant = true
+    else
+      error(("Unexpected annotation '%s'"):format(token.val))
+    end
+
+    expect_res = self:advance_comma_unless(TokenKind.CLOSE_ANGLE)
+    if expect_res:is_err() then
+      return AnnotationsResult.err(expect_res:get_err())
+    end
+  end
+
+  expect_res = self:expect(TokenKind.CLOSE_ANGLE)
+  if expect_res:is_err() then
+    return AnnotationsResult.err(expect_res:get_err())
+  end
+
+  return AnnotationsResult.ok(annotations)
+end
+
 function Parser:parse_id_decl(scope: *Node, in_rec: boolean): ParseResult
   assert(scope and scope:is_scope())
 
@@ -1668,6 +1704,16 @@ function Parser:parse_id_decl(scope: *Node, in_rec: boolean): ParseResult
     end
 
     id_type = parse_res:get_ok()
+  end
+
+  local id_decl_annotations: Annotations
+  if self:is({ TokenKind.OPEN_ANGLE }) then
+    local annot_res = self:parse_annotations()
+    if annot_res:is_err() then
+      return ParseResult.err(annot_res:get_err())
+    end
+
+    id_decl_annotations = annot_res:get_ok()
   end
 
   local id_val: *Node
@@ -1705,6 +1751,17 @@ function Parser:parse_id_decl(scope: *Node, in_rec: boolean): ParseResult
     ))
   end
 
+  if id_val and (id_val.is_type or id_val.is_type_id) and not id_decl_annotations.constant then
+    -- error("Type declaration must be a constant")
+    return ParseResult.err(ErrLoc.new(
+      ErrLocKind.SYNTAX,
+      self.loc,
+      "Type declaration must be a constant",
+      s_token.s_pos,
+      s_token.e_pos
+    ))
+  end
+
   local id_decl = new(Node)
   $id_decl = {
     kind = NodeKind.ID_DECL,
@@ -1715,6 +1772,7 @@ function Parser:parse_id_decl(scope: *Node, in_rec: boolean): ParseResult
 
     type = id_type,
     name = id_name,
+    annotations = id_decl_annotations,
     val = id_val
   }
   return ParseResult.ok(id_decl)
@@ -1728,6 +1786,16 @@ function Parser:parse_assignment(scope: *Node): ParseResult
     return parse_res
   end
   local assignment_id = parse_res:get_ok()
+
+  if assignment_id.annotations.constant then
+    return ParseResult.err(ErrLoc.new(
+      ErrLocKind.SEMANTIC,
+      self.loc,
+      "constant values cannot be reassigned",
+      assignment_id.s_pos,
+      assignment_id.e_pos
+    ))
+  end
 
   local expect_res = self:expect(TokenKind.EQUALS)
   if expect_res:is_err() then
@@ -1802,6 +1870,7 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
     scope = scope,
 
     name = proc_def_name,
+    annotations = { constant = true },
   }
 
   expect_res = self:expect(TokenKind.OPEN_PAREN)
@@ -1874,6 +1943,7 @@ function Parser:parse_proc_def(scope: *Node): ParseResult
 
     name = proc_def.name,
     val = proc_def,
+    annotations = { constant = true },
     type = proc_def.type,
   }
   proc_def.children:push(proc_id_decl)
@@ -2316,6 +2386,7 @@ function Parser:parse_record(scope: *Node): ParseResult
     fields = record_fields,
     is_rec = true,
     is_type = true,
+    annotations = { constant = true },
     type = &type_type
   }
   return ParseResult.ok(record_node)
