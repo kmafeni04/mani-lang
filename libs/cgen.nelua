@@ -1,16 +1,18 @@
 require "map-nelua.map"
 
-local Parser = require ".parser"
-
 local tokenizer = require ".tokenizer"
 local Token = tokenizer.Token
 local TokenKind = tokenizer.TokenKind
 local TokenKind_tostring = tokenizer.TokenKind_tostring
 
+local Parser = require ".parser"
 local Node = Parser.Node
 local NodeKind = Parser.NodeKind
 local NodeKind_tostring = Parser.NodeKind_tostring
 local builtin_types = Parser.builtin_types
+
+local ErrLoc = require ".errloc"
+local ErrLocKind = ErrLoc.ErrLocKind
 
 local varaint = require "variant-nelua.variant"
 local Option = varaint.Option
@@ -242,7 +244,7 @@ local function print_arg_snippet(print_arg: string, t: *Node): string
       for i = 1, #t.fields do
         local field = t.fields[i]
         sb:write(field.name, ": ", field.type.name)
-        if i > 1 and i < #t.fields then
+        if i < #t.fields then
           sb:write(", ")
         end
       end
@@ -260,7 +262,7 @@ local function print_arg_snippet(print_arg: string, t: *Node): string
         local field = t.type.fields[i]
         sb:write('fputs("', field.name, ' = ", stdout);\n')
         sb:write(print_arg_snippet(print_arg .. "." .. field.name, field.type))
-        if i > 1 and i < #t.type.fields then
+        if i < #t.type.fields then
           sb:write('fputs(", ", stdout);\n')
         end
       end
@@ -404,6 +406,40 @@ function Cgen:gen_rec_def(node: *Node)
   self.sb_head:write(sb:promote())
 end
 
+local array_bound_check_count: integer
+
+function Cgen:gen_array_bound_check(node: *Node): string
+  assert(node)
+
+  local errloc_str = ErrLoc.new(
+    ErrLocKind.RUNTIME,
+    self.parser.loc,
+    "index is out of bounds",
+    node.val.s_pos,
+    node.val.e_pos
+  ):tostring():gsub("\27", "\\033"):gsub("\n", "\\n"):gsub('"', '\\"')
+
+  -- print(errloc_str)
+  local array_bound_check_name = ("%s_array_bound_check_%d"):format(lang_info.LANG_NAME, array_bound_check_count + 1)
+
+  self.sb_head:write(([[
+  int64_t %s(int64_t index, uint64_t len) {
+    if((uint64_t)index >= len || index < 0 ) {
+      fputs("%s", stderr);
+      abort();
+    }
+    return index;
+  }
+  ]]):format(array_bound_check_name, errloc_str))
+  array_bound_check_count = array_bound_check_count + 1
+
+  local len = node.parent.type.is_type_id and node.parent.type.type.len or node.parent.type.len
+
+  local sb: stringbuilder
+  sb:write("[", array_bound_check_name, "(", self:gen_expr(node.val), ", ", len, ")]")
+  return sb:promote()
+end
+
 Cgen.gen_expr = function(self: *Cgen, node: *Node): string
   assert(node)
 
@@ -451,7 +487,7 @@ Cgen.gen_expr = function(self: *Cgen, node: *Node): string
     [NodeKind.INDEX] = (do
       -- TODO: Bounds checking
       local index_sb: stringbuilder
-      index_sb:write(self:gen_expr(node.parent), "[", self:gen_expr(node.val), "]")
+      index_sb:write(self:gen_expr(node.parent), self:gen_array_bound_check(node))
       in index_sb:promote()
     end),
     [NodeKind.TYPE] = (do
@@ -731,6 +767,7 @@ function Cgen:final(): string
 #endif
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>

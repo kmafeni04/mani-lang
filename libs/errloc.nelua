@@ -7,6 +7,7 @@ local ErrLocKind = @enum{
   _UNDEFINED = 0,
   SEMANTIC,
   SYNTAX,
+  RUNTIME,
   _COUNT
 }
 
