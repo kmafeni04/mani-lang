@@ -468,7 +468,7 @@ function Node:tostring(indent: integer, inline: boolean): string
       for i, field in ipairs(self.fields) do
         sb:write(field:tostring(indent + 1), "\n")
       end
-      sb:write("}")
+      sb:write(indent_str, "}")
     case NodeKind.INIT_FIELD then
       sb:write(" -> ", self.name, " = ", self.val:tostring(indent + 1, true))
     case NodeKind.PROC_DEF then
@@ -846,11 +846,11 @@ Parser.check_node_type = function(self: *Parser, t: *Node, node: *Node): Option(
     end
   end
 
-  local node_type = node.type.is_type and node.type or node.type.type
+  local node_type = node.is_type and node or node.type
 
   if typ.is_array and node_type.is_array then
     if typ.len >= node_type.len then
-      local err_loc_opt = self:check_node_type(typ.val.type, node_type.val )
+      local err_loc_opt = self:check_node_type(typ.val, node_type.val)
       if err_loc_opt:is_some() then
         return err_loc_opt
       end
@@ -1759,9 +1759,8 @@ function Parser:parse_id_decl(scope: *Node, in_rec: boolean): ParseResult
   end
 
   if id_val and (id_val.is_type or id_val.is_type_id) and not id_decl_annotations.constant then
-    -- error("Type declaration must be a constant")
     return ParseResult.err(ErrLoc.new(
-      ErrLocKind.SYNTAX,
+      ErrLocKind.SEMANTIC,
       self.loc,
       "Type declaration must be a constant",
       s_token.s_pos,

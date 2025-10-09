@@ -24,7 +24,7 @@ AST
   TYPE X{
     ID_DECL -> name: TYPE string{
       ID_DECL -> data: TYPE *[0]u8
-      ID_DECL -> size: TYPE u64
+      ID_DECL -> len: TYPE u64
     }
   }
 ]]
@@ -56,18 +56,18 @@ AST
   TYPE X{
     ID_DECL -> name: TYPE string{
       ID_DECL -> data: TYPE *[0]u8
-      ID_DECL -> size: TYPE u64
+      ID_DECL -> len: TYPE u64
     }
   }
   ID_DECL -> Y: TYPE X{
     ID_DECL -> name: TYPE string{
       ID_DECL -> data: TYPE *[0]u8
-      ID_DECL -> size: TYPE u64
+      ID_DECL -> len: TYPE u64
     }
   } = ID -> X: TYPE X{
       ID_DECL -> name: TYPE string{
         ID_DECL -> data: TYPE *[0]u8
-        ID_DECL -> size: TYPE u64
+        ID_DECL -> len: TYPE u64
       }
     }
 ]]
@@ -79,7 +79,7 @@ do
   local content = [[
 s := "hello world"
 
-print(s.size)
+print(s.len)
 ]]
 
   local new_parser_res = Parser.new("rec_field_access", content)
@@ -96,10 +96,120 @@ print(s.size)
 AST
   ID_DECL -> s: TYPE string{
     ID_DECL -> data: TYPE *[0]u8
-    ID_DECL -> size: TYPE u64
+    ID_DECL -> len: TYPE u64
   } = LITERAL("hello world")
   PROC_CALL print(
-    FIELD -> s.size: TYPE u64
+    FIELD -> len: TYPE u64
+  )
+]]
+  local res = ast:tostring()
+  assert(expected == res)
+end
+
+do
+  local content = [[
+a : record{
+  name: string,
+  age: i64
+} = { name = "john", age = 10 }
+
+print(a.name, a.age)
+]]
+
+  local new_parser_res = Parser.new("anon_rec_field_access", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+
+  local ast = parser_res:get_ok()
+
+  local expected = [[
+AST
+  ID_DECL -> a: TYPE anon_record{
+    ID_DECL -> name: TYPE string{
+      ID_DECL -> data: TYPE *[0]u8
+      ID_DECL -> len: TYPE u64
+    }
+    ID_DECL -> age: TYPE i64
+  } = INIT_LIST {
+    INIT_FIELD -> name = LITERAL("john")
+    INIT_FIELD -> age = LITERAL(10)
+  }
+  PROC_CALL print(
+    FIELD -> name: TYPE string{
+        ID_DECL -> data: TYPE *[0]u8
+        ID_DECL -> len: TYPE u64
+      }    FIELD -> age: TYPE i64
+  )
+]]
+  local res = ast:tostring()
+  assert(expected == res)
+end
+
+do
+  local content = [[
+B : <const> = record{
+  name: string
+}
+
+b : B
+print(b.name)
+
+c: B = { name = "james"}
+print(c.name)
+]]
+
+  local new_parser_res = Parser.new("anon_rec_alias_field_access", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+
+  local ast = parser_res:get_ok()
+
+  local expected = [[
+AST
+  ID_DECL -> B: TYPE anon_record{
+    ID_DECL -> name: TYPE string{
+      ID_DECL -> data: TYPE *[0]u8
+      ID_DECL -> len: TYPE u64
+    }
+  } = TYPE anon_record{
+    ID_DECL -> name: TYPE string{
+      ID_DECL -> data: TYPE *[0]u8
+      ID_DECL -> len: TYPE u64
+    }
+  }
+  ID_DECL -> b: ID -> B: TYPE anon_record{
+      ID_DECL -> name: TYPE string{
+        ID_DECL -> data: TYPE *[0]u8
+        ID_DECL -> len: TYPE u64
+      }
+    }
+  PROC_CALL print(
+    FIELD -> name: TYPE string{
+        ID_DECL -> data: TYPE *[0]u8
+        ID_DECL -> len: TYPE u64
+      }
+  )
+  ID_DECL -> c: ID -> B: TYPE anon_record{
+      ID_DECL -> name: TYPE string{
+        ID_DECL -> data: TYPE *[0]u8
+        ID_DECL -> len: TYPE u64
+      }
+    } = INIT_LIST {
+    INIT_FIELD -> name = LITERAL("james")
+  }
+  PROC_CALL print(
+    FIELD -> name: TYPE string{
+        ID_DECL -> data: TYPE *[0]u8
+        ID_DECL -> len: TYPE u64
+      }
   )
 ]]
   local res = ast:tostring()

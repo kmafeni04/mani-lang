@@ -28,7 +28,8 @@ X : type <const> = record{
   name: string,
   age: i64,
   chars: [5]string
-}]]
+}
+]]
 
   local new_parser_res = Parser.new("id_decl_anon_rec", content)
   assert(new_parser_res:is_ok())
@@ -45,14 +46,14 @@ AST
   ID_DECL -> X: TYPE anon_record{
     ID_DECL -> name: TYPE string{
       ID_DECL -> data: TYPE *[0]u8
-      ID_DECL -> size: TYPE u64
+      ID_DECL -> len: TYPE u64
     }
     ID_DECL -> age: TYPE i64
     ID_DECL -> chars: TYPE [5]string
   } = TYPE anon_record{
     ID_DECL -> name: TYPE string{
       ID_DECL -> data: TYPE *[0]u8
-      ID_DECL -> size: TYPE u64
+      ID_DECL -> len: TYPE u64
     }
     ID_DECL -> age: TYPE i64
     ID_DECL -> chars: TYPE [5]string
@@ -85,14 +86,14 @@ AST
   ID_DECL -> X: TYPE anon_record{
     ID_DECL -> name: TYPE string{
       ID_DECL -> data: TYPE *[0]u8
-      ID_DECL -> size: TYPE u64
+      ID_DECL -> len: TYPE u64
     }
     ID_DECL -> age: TYPE i64
     ID_DECL -> chars: TYPE [5]string
   } = TYPE anon_record{
     ID_DECL -> name: TYPE string{
       ID_DECL -> data: TYPE *[0]u8
-      ID_DECL -> size: TYPE u64
+      ID_DECL -> len: TYPE u64
     }
     ID_DECL -> age: TYPE i64
     ID_DECL -> chars: TYPE [5]string
@@ -128,14 +129,14 @@ AST
   ID_DECL -> X: TYPE anon_record{
     ID_DECL -> name: TYPE string{
       ID_DECL -> data: TYPE *[0]u8
-      ID_DECL -> size: TYPE u64
+      ID_DECL -> len: TYPE u64
     }
     ID_DECL -> age: TYPE i64
     ID_DECL -> chars: TYPE [5]string
   } = TYPE anon_record{
     ID_DECL -> name: TYPE string{
       ID_DECL -> data: TYPE *[0]u8
-      ID_DECL -> size: TYPE u64
+      ID_DECL -> len: TYPE u64
     }
     ID_DECL -> age: TYPE i64
     ID_DECL -> chars: TYPE [5]string
@@ -143,14 +144,14 @@ AST
   ID_DECL -> Y: TYPE anon_record{
     ID_DECL -> name: TYPE string{
       ID_DECL -> data: TYPE *[0]u8
-      ID_DECL -> size: TYPE u64
+      ID_DECL -> len: TYPE u64
     }
     ID_DECL -> age: TYPE i64
     ID_DECL -> chars: TYPE [5]string
   } = ID -> X: TYPE anon_record{
       ID_DECL -> name: TYPE string{
         ID_DECL -> data: TYPE *[0]u8
-        ID_DECL -> size: TYPE u64
+        ID_DECL -> len: TYPE u64
       }
       ID_DECL -> age: TYPE i64
       ID_DECL -> chars: TYPE [5]string
@@ -201,7 +202,7 @@ i := 1 + 1 * 3
 
   local expected = [[
 AST
-  ID_DECL -> i: TYPE i64 = BIN_OP(LITERAL(1) OP(+) BIN_OP(LITERAL(1) OP(*) LITERAL(3)))
+  ID_DECL -> i: TYPE i64 = BIN_EXPR(LITERAL(1) OP(+) BIN_EXPR(LITERAL(1) OP(*) LITERAL(3)))
 ]]
   local res = ast:tostring()
   assert(expected == res)
@@ -220,11 +221,11 @@ do
   local errloc = parser_res:get_err()
   assert(errloc.err == "Type 'i64' does not match type 'string'")
   assert(errloc.s_pos.line == 1)
+  assert(errloc.s_pos.index == 13)
   assert(errloc.s_pos.col == 13)
   assert(errloc.e_pos.line == 1)
   assert(errloc.e_pos.col == 14)
-  assert(errloc.s_index == 13)
-  assert(errloc.e_index == 14)
+  assert(errloc.e_pos.index == 14)
   assert(errloc.kind == ErrLoc.ErrLocKind.SEMANTIC)
 end
 
@@ -244,8 +245,8 @@ do
   assert(errloc.s_pos.col == 10)
   assert(errloc.e_pos.line == 1)
   assert(errloc.e_pos.col == 12)
-  assert(errloc.s_index == 10)
-  assert(errloc.e_index == 12)
+  assert(errloc.s_pos.index == 10)
+  assert(errloc.e_pos.index == 12)
   assert(errloc.kind == ErrLoc.ErrLocKind.SEMANTIC)
 end
 
@@ -266,13 +267,13 @@ X := record{
   assert(parser_res:is_err())
 
   local errloc = parser_res:get_err()
-  assert(errloc.err == "Types must be assigned to a constant declaration")
+  assert(errloc.err == "Type declaration must be a constant")
   assert(errloc.s_pos.line == 1)
   assert(errloc.s_pos.col == 1)
-  assert(errloc.e_pos.line == 5)
+  assert(errloc.e_pos.line == 1)
   assert(errloc.e_pos.col == 1)
-  assert(errloc.s_index == 1)
-  assert(errloc.e_index == 61)
+  assert(errloc.s_pos.index == 1)
+  assert(errloc.e_pos.index == 1)
   assert(errloc.kind == ErrLoc.ErrLocKind.SEMANTIC)
 end
 
@@ -296,12 +297,12 @@ Y := X
   assert(parser_res:is_err())
 
   local errloc = parser_res:get_err()
-  assert(errloc.err == "Types must be assigned to a constant declaration")
+  assert(errloc.err == "Type declaration must be a constant")
   assert(errloc.s_pos.line == 7)
   assert(errloc.s_pos.col == 1)
   assert(errloc.e_pos.line == 7)
-  assert(errloc.e_pos.col == 6)
-  assert(errloc.s_index == 73)
-  assert(errloc.e_index == 78)
+  assert(errloc.e_pos.col == 1)
+  assert(errloc.s_pos.index == 73)
+  assert(errloc.e_pos.index == 73)
   assert(errloc.kind == ErrLoc.ErrLocKind.SEMANTIC)
 end
