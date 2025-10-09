@@ -1,2 +1,105 @@
 local Parser = require "...libs.parser"
+do
+  local content = [[
+X : type <const> = record{
+  name: string,
+  age: i64,
+  strs: [5]string
+}
+
+x: X
+x.name = "james"
+print(x.name)
+
+for i := 0, 4 {
+  x.strs[i] = "hello"
+  print(x.strs[i])
+}
+
+x = {}
+print(x.name)
+]]
+
+  local new_parser_res = Parser.new("for_loop", content)
+  assert(new_parser_res:is_ok())
+
+  local parser = new_parser_res:get_ok()
+
+  local parser_res = parser:parse()
+  assert(parser_res:is_ok())
+
+  local ast = parser_res:get_ok()
+
+  local expected = [[
+AST
+  ID_DECL -> X: TYPE anon_record{
+    ID_DECL -> name: TYPE string{
+      ID_DECL -> data: TYPE *[0]u8
+      ID_DECL -> len: TYPE u64
+    }
+    ID_DECL -> age: TYPE i64
+    ID_DECL -> strs: TYPE [5]string
+  } = TYPE anon_record{
+    ID_DECL -> name: TYPE string{
+      ID_DECL -> data: TYPE *[0]u8
+      ID_DECL -> len: TYPE u64
+    }
+    ID_DECL -> age: TYPE i64
+    ID_DECL -> strs: TYPE [5]string
+  }
+  ID_DECL -> x: ID -> X: TYPE anon_record{
+      ID_DECL -> name: TYPE string{
+        ID_DECL -> data: TYPE *[0]u8
+        ID_DECL -> len: TYPE u64
+      }
+      ID_DECL -> age: TYPE i64
+      ID_DECL -> strs: TYPE [5]string
+    }
+  ASSIGNMENT -> FIELD -> name: TYPE string{
+        ID_DECL -> data: TYPE *[0]u8
+        ID_DECL -> len: TYPE u64
+      }: TYPE string{
+      ID_DECL -> data: TYPE *[0]u8
+      ID_DECL -> len: TYPE u64
+    } = LITERAL("james")
+  PROC_CALL print(
+    FIELD -> name: TYPE string{
+        ID_DECL -> data: TYPE *[0]u8
+        ID_DECL -> len: TYPE u64
+      }
+  )
+  FOR_LOOP -> (ID_DECL -> i: TYPE i64 = LITERAL(0) ; LITERAL(4))
+    ASSIGNMENT -> INDEX -> FIELD -> strs: TYPE [5]string [ID -> i: TYPE i64]: TYPE string{
+        ID_DECL -> data: TYPE *[0]u8
+        ID_DECL -> len: TYPE u64
+      } = LITERAL("hello")
+    PROC_CALL print(
+      INDEX -> FIELD -> strs: TYPE [5]string [ID -> i: TYPE i64]
+    )
+  ASSIGNMENT -> ID -> x: ID -> X: TYPE anon_record{
+          ID_DECL -> name: TYPE string{
+            ID_DECL -> data: TYPE *[0]u8
+            ID_DECL -> len: TYPE u64
+          }
+          ID_DECL -> age: TYPE i64
+          ID_DECL -> strs: TYPE [5]string
+        }: ID -> X: TYPE anon_record{
+        ID_DECL -> name: TYPE string{
+          ID_DECL -> data: TYPE *[0]u8
+          ID_DECL -> len: TYPE u64
+        }
+        ID_DECL -> age: TYPE i64
+        ID_DECL -> strs: TYPE [5]string
+      } = INIT_LIST {
+    }
+  PROC_CALL print(
+    FIELD -> name: TYPE string{
+        ID_DECL -> data: TYPE *[0]u8
+        ID_DECL -> len: TYPE u64
+      }
+  )
+]]
+  local res = ast:tostring()
+  assert(expected == res)
+end
 

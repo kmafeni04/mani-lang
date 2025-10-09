@@ -1,0 +1,17 @@
+X : type <const> = record{
+  name: string,
+  age: i64,
+  strs: [5]string
+}
+
+x: X
+x.name = "james"
+print(x.name)
+
+for i := 0, 4 {
+  x.strs[i] = "hello"
+  print(x.strs[i])
+}
+
+x = {}
+print(x.name)

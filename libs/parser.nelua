@@ -486,6 +486,17 @@ function Node:tostring(indent: integer, inline: boolean): string
   return sb:promote()
 end
 
+function Node:is(node_kinds: sequence(NodeKind)): boolean
+
+  for _, kind in ipairs(node_kinds) do
+    if kind == self.kind then
+      return true
+    end
+  end
+
+  return false
+end
+
 function Node:is_scope(): boolean
   switch self.kind do
     case
@@ -1784,22 +1795,20 @@ function Parser:parse_id_decl(scope: *Node, in_rec: boolean): ParseResult
   return ParseResult.ok(id_decl)
 end
 
-function Parser:parse_assignment(scope: *Node): ParseResult
+function Parser:parse_assignment(scope: *Node, node: *Node): ParseResult
   assert(scope and scope:is_scope())
 
-  local parse_res = self:parse_id(scope)
-  if parse_res:is_err() then
-    return parse_res
+  if not node:is({ NodeKind.FIELD, NodeKind.ID, NodeKind.INDEX }) then
+    error(("Unexpected Node '%s'"):format(node:tostring()))
   end
-  local assignment_id = parse_res:get_ok()
 
-  if assignment_id.annotations.constant then
+  if node.annotations.constant then
     return ParseResult.err(ErrLoc.new(
       ErrLocKind.SEMANTIC,
       self.loc,
       "constant values cannot be reassigned",
-      assignment_id.s_pos,
-      assignment_id.e_pos
+      node.s_pos,
+      node.e_pos
     ))
   end
 
@@ -1808,13 +1817,13 @@ function Parser:parse_assignment(scope: *Node): ParseResult
     return ParseResult.err(expect_res:get_err())
   end
 
-  parse_res = self:parse_expr(scope)
+  local parse_res = self:parse_expr(scope)
   if parse_res:is_err() then
     return parse_res
   end
   local assignment_val = parse_res:get_ok()
 
-  local err_loc_opt = self:check_node_type(assignment_id.type, assignment_val)
+  local err_loc_opt = self:check_node_type(node.type, assignment_val)
   if err_loc_opt:is_some() then
     return ParseResult.err(err_loc_opt:get_some())
   end
@@ -1823,11 +1832,11 @@ function Parser:parse_assignment(scope: *Node): ParseResult
   $assignment_node = {
     kind = NodeKind.ASSIGNMENT,
 
-    s_pos = assignment_id.s_pos,
+    s_pos = node.s_pos,
     e_pos = assignment_val.e_pos,
     scope = scope,
 
-    id = assignment_id,
+    id = node,
     val = assignment_val
   }
 
@@ -2425,10 +2434,6 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
     [TokenKind.IDENTIFIER] = (do
       if self:peek_next().kind == TokenKind.COLON then
         in self:parse_id_decl(scope)
-      elseif self:peek_next().kind == TokenKind.OPEN_PAREN then
-        in self:parse_primary(scope)
-      elseif self:peek_next().kind == TokenKind.EQUALS then
-        in self:parse_assignment(scope)
       end
       in self:parse_id(scope)
     end),
@@ -2466,8 +2471,35 @@ Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): Par
     return parse_res
   end
 
-  local child = parse_res:get_ok()
-  scope.children:push(child)
+  local current_node = parse_res:get_ok()
+  if current_node and current_node.type then
+    local typ: *Node = current_node.type
+    if (typ.type.is_rec or typ.is_rec) and self:is({ TokenKind.DOT }) then
+      parse_res = self:parse_field(scope, current_node)
+    elseif typ.is_proc and self:is({ TokenKind.OPEN_PAREN }) then
+      parse_res = self:parse_proc_call(scope, current_node)
+    elseif typ.is_array and self:is({ TokenKind.OPEN_BRACKET }) then
+      parse_res = self:parse_index(scope, current_node)
+    else
+      parse_res = ParseResult.ok(current_node)
+    end
+  end
+
+  if parse_res:is_err() then
+    return parse_res
+  end
+  current_node = parse_res:get_ok()
+
+  if self:is({ TokenKind.EQUALS }) then
+    parse_res = self:parse_assignment(scope, current_node)
+  end
+
+  if parse_res:is_err() then
+    return parse_res
+  end
+  current_node = parse_res:get_ok()
+
+  scope.children:push(current_node)
 
   return self:parse_scope(scope, till)
 end

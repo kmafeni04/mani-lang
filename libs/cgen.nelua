@@ -689,7 +689,7 @@ Cgen.gen_scope = function(self: *Cgen): string
       end),
       [NodeKind.ASSIGNMENT] = (do
         local assign_sb: stringbuilder
-        assign_sb:write(self.prefix .. "_" .. child.id.name, " = ", self:gen_expr(child.val), ";\n")
+        assign_sb:write(self:gen_expr(child.id), " = ", self:gen_expr(child.val), ";\n")
         in assign_sb:promote()
       end),
       [NodeKind.TYPE] = (do
