@@ -97,7 +97,7 @@ function Cgen:gen_type(t: *Node): string
     [t.kind == NodeKind.ID] = self.prefix .. "_" .. t.name,
     [t.is_rec] = (do
       if t.is_anonymous then
-        in "anon_rec_" .. anon_rec_count
+        in self.prefix .. "_anon_rec_" .. anon_rec_count
       end
       in self.prefix .. "_" .. t.name
     end),
@@ -367,32 +367,14 @@ function Cgen:gen_array(node: *Node): string
   return sb:promote()
 end
 
-function Cgen:gen_anon_rec_def(node: *Node)
-  assert(node.kind == NodeKind.TYPE)
-  assert(node.is_anonymous)
-
-  anon_rec_count = anon_rec_count + 1
-  local sb: stringbuilder
-
-  sb:write("typedef struct {\n")
-  for _, field in ipairs(node.fields) do
-    sb:write(self:gen_type(field.type), " ", field.name)
-    if field.type.is_array then
-      sb:write("[", field.type.len, "]")
-    end
-    sb:write(";\n")
-  end
-  sb:write("} anon_rec_", anon_rec_count, ";\n")
-
-  self.sb_head:write(sb:promote())
-end
-
 function Cgen:gen_rec_def(node: *Node)
   assert(node.kind == NodeKind.TYPE)
 
   anon_rec_count = anon_rec_count + 1
   local sb: stringbuilder
 
+  local name = self.prefix .. "_" .. (node.is_anonymous and "anon_rec_" .. anon_rec_count or node.name)
+
   sb:write("typedef struct {\n")
   for _, field in ipairs(node.fields) do
     sb:write(self:gen_type(field.type), " ", field.name)
@@ -401,7 +383,7 @@ function Cgen:gen_rec_def(node: *Node)
     end
     sb:write(";\n")
   end
-  sb:write("} ", self.prefix, "_" , node.name , ";\n\n")
+  sb:write("} ", name, ";\n\n")
 
   self.sb_head:write(sb:promote())
 end
@@ -477,7 +459,7 @@ Cgen.gen_expr = function(self: *Cgen, node: *Node): string
     end),
     [NodeKind.ARRAY] = self:gen_array(node),
     [NodeKind.ID] = (do
-      if node.is_type_id then
+      if node.is_type_id and not node.type.is_anonymous then
         in ""
       end
       local id_sb: stringbuilder
@@ -491,18 +473,19 @@ Cgen.gen_expr = function(self: *Cgen, node: *Node): string
       in index_sb:promote()
     end),
     [NodeKind.TYPE] = (do
-      if node.is_rec then
-        if node.is_anonymous then
-          self:gen_anon_rec_def(node)
-        end
-      else
-        error(("Unknown type '%s'"):format(node.name))
-      end
+      -- if node.is_rec then
+      --   if node.is_anonymous then
+      --     self:gen_rec_def(node)
+      --   end
+      -- else
+      --   error(("Unknown type '%s'"):format(node.name))
+      -- end
       in ""
     end),
     [NodeKind.INIT_LIST] = (do
       local init_list_sb: stringbuilder
-      init_list_sb:write("(", self.prefix, "_", node.type.name , ")", "{")
+      local name: string = self.prefix .. "_" .. (node.type.is_anonymous and "anon_rec_" .. anon_rec_count + 1 or node.type.name)
+      init_list_sb:write("(", name , ")", "{")
       for i = 1, #node.fields do
         local field = node.fields[i]
         init_list_sb:write(" .", field.name, " = ", self:gen_expr(field.val), ", ")
@@ -618,7 +601,16 @@ function Cgen:gen_id_decl(node: *Node): string
       in nil
     end),
     [node.type.is_type] = (do
-      self.sb_head:write("typedef ", self.prefix, "_", node.type.name, " ", self.prefix, "_", node.name, ";\n")
+      if node.val and node.val.is_anonymous then
+        self:gen_rec_def(node.type)
+        self.sb_head:write("typedef ", self.prefix, "_anon_rec_", anon_rec_count, " ", self.prefix, "_", node.name, ";\n")
+      elseif node.type.is_anonymous then
+        self:gen_rec_def(node.type)
+        sb:write(self.prefix, "_anon_rec_", anon_rec_count, " ", name, " = ", final_value , ";\n")
+        -- error()
+      else
+        self.sb_head:write("typedef ", self.prefix, "_", node.type.name, " ", self.prefix, "_", node.name, ";\n")
+      end
       in nil
     end),
     [node.type.is_type_id] = (do

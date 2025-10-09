@@ -1,3 +1,4 @@
+# Regular Record
 record X {
   name: string,
   age: i64,
@@ -20,6 +21,7 @@ for i := 0, 2 {
   print(i + 1, xs[i])
 }
 
+# Record alias
 Y : <const> = X
 
 print(Y)
@@ -28,3 +30,22 @@ y : Y = { name = "james", age = 10, hobbies = ["sports", "watching tv"] }
 
 print(y, "\n")
 print(y.name, y.name.len, y.age, y.hobbies, y.hobbies[0])
+
+# Anon record
+a : record{
+  name: string,
+  age: i64
+} = { name = "john", age = 10 }
+
+print(a.name)
+
+# Anon record alias
+B : <const> = record{
+  name: string
+}
+
+b : B
+print(b.name)
+
+c: B = { name = "james"}
+print(c.name)

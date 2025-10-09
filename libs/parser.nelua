@@ -518,6 +518,7 @@ local Parser.parse_expr: function(self: *Parser, scope: *Node): ParseResult
 local Parser.parse_scope: function(self: *Parser, scope: *Node, till: TokenKind): ParseResult
 local Parser.check_node_type: function(self: *Parser, typ: *Node, node: *Node): Option(ErrLoc)
 local Parser.parse_primary: function(self: *Parser, scope: *Node, current_node: *Node): ParseResult
+local Parser.parse_record: function(self:*Parser, scope: *Node): ParseResult
 
 local type_type: Node = {
   kind = NodeKind.TYPE,
@@ -832,7 +833,7 @@ Parser.check_node_type = function(self: *Parser, t: *Node, node: *Node): Option(
       if err_loc_opt:is_some() then
         return err_loc_opt
       end
-      node.type = typ
+      node.type = t
       return Option.None()
     else
       return Option.Some(ErrLoc.new(
@@ -1006,7 +1007,7 @@ function Parser:parse_id(scope: *Node): ParseResult
 
     name = token.val,
     type = id_type,
-    is_type_id = (decl_node.is_type or (decl_node.val and decl_node.val.is_type_id)),
+    is_type_id = (decl_node.is_type or (decl_node.val and decl_node.val.is_type_id) or decl_node.type.is_anonymous),
     annotations = decl_node.annotations
   }
 
@@ -1319,7 +1320,7 @@ end
 
 function Parser:parse_field(scope: *Node, parent: *Node): ParseResult
   assert(scope and scope:is_scope())
-  assert(parent and parent.type.type.is_rec)
+  assert(parent and (parent.type.is_rec or parent.type.type.is_rec))
 
   local parent_type: *Node = parent.type.is_rec and parent.type or parent.type.type
 
@@ -1415,6 +1416,8 @@ Parser.parse_primary = function(self: *Parser, scope: *Node, current_node: *Node
         in self:parse_array(scope)
       elseif self:is({ TokenKind.OPEN_CURLY }) then
         in self:parse_init_list(scope)
+      elseif self:is({ TokenKind.KEYWORD_RECORD }) then
+        in self:parse_record(scope)
       else
         in ParseResult.err(error_unexpected_token(self, token))
       end
@@ -1429,7 +1432,7 @@ Parser.parse_primary = function(self: *Parser, scope: *Node, current_node: *Node
 
   if current_node and current_node.type then
     local typ: *Node = current_node.type
-    if typ.type.is_rec and self:is({ TokenKind.DOT }) then
+    if (typ.type.is_rec or typ.is_rec) and self:is({ TokenKind.DOT }) then
       return self:parse_field(scope, current_node)
     elseif typ.is_proc and self:is({ TokenKind.OPEN_PAREN }) then
       return self:parse_proc_call(scope, current_node)
@@ -1613,6 +1616,10 @@ function Parser:parse_type(scope: *Node): ParseResult
     return ParseResult.ok(new_array_type(scope, array_len, array_sub_type, s_token.s_pos, e_token.e_pos))
   end
 
+  if self:is({ TokenKind.KEYWORD_RECORD }) then
+    return self:parse_record(scope)
+  end
+
   local token = self:peek()
   if not self:is({ TokenKind.IDENTIFIER }) then
     return ParseResult.err(error_unexpected_token(self, token))
@@ -1630,6 +1637,7 @@ function Parser:parse_type(scope: *Node): ParseResult
       local id = parse_res:get_ok()
 
       if not id.type.is_type then
+        print(id:tostring())
         error()
       end
 
@@ -1697,7 +1705,7 @@ function Parser:parse_id_decl(scope: *Node, in_rec: boolean): ParseResult
   end
 
   local id_type: *Node
-  if self:is({ TokenKind.IDENTIFIER, TokenKind.OPEN_BRACKET }) then
+  if self:is({ TokenKind.IDENTIFIER, TokenKind.OPEN_BRACKET, TokenKind.KEYWORD_RECORD }) then
     local parse_res = self:parse_type(scope)
     if parse_res:is_err() then
       return parse_res
@@ -1722,7 +1730,6 @@ function Parser:parse_id_decl(scope: *Node, in_rec: boolean): ParseResult
     if expect_res:is_err() then
       return ParseResult.err(expect_res:get_err())
     end
-
     local parse_res = self:parse_expr(scope)
     if parse_res:is_err() then
       return parse_res
@@ -1735,7 +1742,7 @@ function Parser:parse_id_decl(scope: *Node, in_rec: boolean): ParseResult
         return ParseResult.err(err_loc_opt:get_some())
       end
     else
-      id_type = id_val.type
+      id_type = id_val.is_type and id_val or id_val.type
     end
   end
 
@@ -2328,24 +2335,26 @@ function Parser:parse_else_stmt(scope: *Node): ParseResult
   return ParseResult.ok(else_stmt)
 end
 
-function Parser:parse_record(scope: *Node): ParseResult
-
+Parser.parse_record = function(self: *Parser, scope: *Node): ParseResult
   local expect_res = self:expect(TokenKind.KEYWORD_RECORD)
   if expect_res:is_err() then
     return ParseResult.err(expect_res:get_err())
   end
   local s_token = expect_res:get_ok()
 
-  expect_res = self:expect(TokenKind.IDENTIFIER)
-  if expect_res:is_err() then
-    return ParseResult.err(expect_res:get_err())
-  end
-  local token = expect_res:get_ok()
-  local record_name = token.val
+  local record_is_anonymous: boolean
+  local record_name: string
+  if self:is({ TokenKind.IDENTIFIER }) then
+    local token = self:advance()
+    record_name = token.val
 
-  local decl_opt = Parser.find_decl_up_scope(scope, record_name, token.s_pos.index)
-  if decl_opt:is_some() then
-    return ParseResult.err(error_redeclaration(self, token))
+    local decl_opt = Parser.find_decl_up_scope(scope, record_name, token.s_pos.index)
+    if decl_opt:is_some() then
+      return ParseResult.err(error_redeclaration(self, token))
+    end
+  else
+    record_is_anonymous = true
+    record_name = "anon_record"
   end
 
   expect_res = self:expect(TokenKind.OPEN_CURLY)
@@ -2386,6 +2395,7 @@ function Parser:parse_record(scope: *Node): ParseResult
     fields = record_fields,
     is_rec = true,
     is_type = true,
+    is_anonymous = record_is_anonymous,
     annotations = { constant = true },
     type = &type_type
   }
