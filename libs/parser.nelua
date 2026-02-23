@@ -1,0 +1,588 @@
+require "map-nelua.map"
+
+local variant = require "variant-nelua.variant"
+local Sum = variant.Sum
+local Result = variant.Result
+local Option = variant.Option
+
+local Pos = require ".pos"
+local lang_info = require ".lang_info"
+
+local tokenizer = require ".tokenizer"
+local Token = tokenizer.Token
+local TokenKind = tokenizer.TokenKind
+local TokenKind_tostring = tokenizer.TokenKind_tostring
+
+local ErrLoc = require ".errloc"
+local ErrLocKind = ErrLoc.ErrLocKind
+
+local Parser = @record{
+  path: string,
+  index: integer,
+  content: string,
+  tokens: sequence(Token)
+}
+
+local NewParserResult = @Result(Parser, ErrLoc)
+function Parser.new(path: string, content: string): NewParserResult
+  local tokenize_result = tokenizer.tokenize(path, content)
+  if tokenize_result:is_err() then
+    return NewParserResult.err(tokenize_result:get_err())
+  end
+  return NewParserResult.ok({
+    path = path,
+    index = 1,
+    content = content,
+    tokens = tokenize_result:get_ok(),
+  })
+end
+
+function Parser:peek()
+  if self.index <= #self.tokens then
+    return self.tokens[self.index]
+  end
+
+  local pos = Pos.index_to_pos(#self.content, self.content)
+  return Token{
+    kind = TokenKind.EOF,
+    val = "",
+    s_pos = pos,
+    e_pos = pos,
+    s_index = #self.content,
+    e_index = #self.content,
+  }
+end
+
+function Parser:peek_next()
+  if self.index + 1 <= #self.tokens then
+    return self.tokens[self.index + 1]
+  end
+
+  local pos = Pos.index_to_pos(#self.content, self.content)
+  return Token{
+    kind = TokenKind.EOF,
+    val = "",
+    s_pos = pos,
+    e_pos = pos,
+    s_index = #self.content,
+    e_index = #self.content,
+  }
+end
+
+function Parser:peek_prev()
+  if self.index - 1 <= #self.tokens then
+    return self.tokens[self.index - 1]
+  end
+
+  local pos = Pos.index_to_pos(#self.content, self.content)
+  return Token{
+    kind = TokenKind.EOF,
+    val = "",
+    s_pos = pos,
+    e_pos = pos,
+    s_index = #self.content,
+    e_index = #self.content,
+  }
+end
+
+function Parser:advance()
+  local token  = self:peek()
+  self.index = self.index + 1
+  return token
+end
+
+local ExpectResult = @Result(Token, ErrLoc)
+
+function Parser:peek_one_of(token_kinds: sequence(TokenKind), msg: string): ExpectResult
+  assert(#token_kinds > 0)
+
+  local token = self:peek()
+
+  for _, token_kind in ipairs(token_kinds) do
+    range_check!(token_kind, TokenKind)
+    if token_kind == token.kind then
+      return ExpectResult.ok(token)
+    end
+  end
+
+  local sb: stringbuilder
+  if msg ~= "" then
+    sb:write(msg)
+  elseif #token_kinds == 1 then
+    sb:write("Expected TokenKind '", TokenKind_tostring(token_kinds[1]), "' but got '", TokenKind_tostring(token.kind), "'")
+  else
+    sb:write("Expected one of TokenKinds '{ ")
+    for _, token_kind in  ipairs(token_kinds) do
+      range_check!(token_kind, TokenKind)
+      sb:write(TokenKind_tostring(token_kind))
+      sb:write(", ")
+    end
+    sb:rollback(2)
+    sb:write(" }' but got '", TokenKind_tostring(token.kind), "'")
+  end
+
+  return ExpectResult.err{
+    path = self.path,
+    content = self.content,
+    s_index = token.s_index,
+    e_index = token.e_index,
+    err = sb:promote(),
+    kind = ErrLocKind.SYNTAX,
+    s_pos = {
+      line = token.s_pos.line,
+      col = token.s_pos.col,
+    },
+    e_pos = {
+      line = token.e_pos.line,
+      col = token.e_pos.col,
+    },
+  }
+end
+
+function Parser:expect_one_of(token_kinds: sequence(TokenKind), msg: string): ExpectResult
+  local result = self:peek_one_of(token_kinds, msg)
+  self:advance()
+  return result
+end
+
+function Parser:expect(token_kind: TokenKind, msg: string): ExpectResult
+  return self:expect_one_of({ token_kind }, msg)
+end
+
+function Parser:advance_comma_unless(token_kind: TokenKind): ExpectResult
+  range_check!(token_kind, TokenKind)
+
+  local token = self:peek()
+  if token.kind == TokenKind.COMMA then
+    if self:peek_next().kind == token_kind or self:peek_next().kind == TokenKind.EOF then
+      return ExpectResult.err({
+        path = self.path,
+        content = self.content,
+        s_index = token.s_index,
+        e_index = token.e_index,
+        err = "Trailing comma",
+        kind = ErrLocKind.SYNTAX,
+        s_pos = {
+          line = token.s_pos.line,
+          col = token.s_pos.col,
+        },
+        e_pos = {
+          line = token.e_pos.line,
+          col = token.e_pos.col,
+        },
+      })
+    end
+    return ExpectResult.ok(self:advance())
+  end
+
+  if token.kind ~= token_kind and token.kind ~= TokenKind.EOF then
+    return ExpectResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = token.s_index,
+      e_index = token.e_index,
+      err = ("Expected Token value ',' but got '%s'"):format(token.val),
+      kind = ErrLocKind.SYNTAX,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
+
+  return ExpectResult.ok(token)
+end
+
+function Parser:advance_comma_until(token_kind: TokenKind): ExpectResult
+  range_check!(token_kind, TokenKind)
+
+  local token = self:peek()
+  if token.kind == TokenKind.COMMA then
+    return ExpectResult.ok(self:advance())
+  end
+
+  if token.kind ~= token_kind and token.kind ~= TokenKind.EOF then
+    return ExpectResult.err({
+      path = self.path,
+      content = self.content,
+      s_index = token.s_index,
+      e_index = token.e_index,
+      err = ("Expected Token value ',' but got '%s'"):format(token.val),
+      kind = ErrLocKind.SYNTAX,
+      s_pos = {
+        line = token.s_pos.line,
+        col = token.s_pos.col,
+      },
+      e_pos = {
+        line = token.e_pos.line,
+        col = token.e_pos.col,
+      },
+    })
+  end
+
+  return ExpectResult.ok(token)
+end
+
+local ScopeNode <forwarddecl> = @record{}
+
+local BaseNode = @record{
+  s_pos: Pos,
+  e_pos: Pos,
+  s_index: uinteger,
+  e_index: uinteger,
+  scope: *ScopeNode
+}
+
+local NodeKind = @enum{
+  _UNDEFINED = 0,
+  ARRAY,
+  ASSIGNMENT,
+  AST,
+  BIN_OP,
+  BREAK,
+  COMMENT,
+  FIELD,
+  FOR_LOOP,
+  ID,
+  ID_DECL,
+  INDEX,
+  INIT_FIELD,
+  INIT_LIST,
+  LITERAL,
+  FN_CALL,
+  FN_DEF,
+  RETURN,
+  TYPE,
+  WHILE_LOOP,
+  _COUNT
+}
+
+##[[
+function copy_base_node_fields(node)
+  assert(node)
+  for _, v in ipairs(BaseNode.value.fields) do
+    node.value:add_field(v.name, v.type)
+  end
+end
+]]
+
+local CommentNode = @record{
+  content: string,
+}
+## copy_base_node_fields(CommentNode)
+
+local FnDefNode = @record{
+  name: string,
+  return_type: string, -- Temporary
+  body: *ScopeNode
+}
+## copy_base_node_fields(FnDefNode)
+
+local FnCallNode <forwarddecl> = @record{}
+
+local StrLitNode = @record{
+  content: string,
+  len: uinteger
+}
+## copy_base_node_fields(StrLitNode)
+
+local ExprNode = @Sum(record{
+  fn_call: *FnCallNode,
+  str_lit: StrLitNode,
+})
+
+FnCallNode = @record{
+  name: string,
+  args: sequence(ExprNode)
+}
+## copy_base_node_fields(FnCallNode)
+
+local StmtNode = @Sum(record{
+  comment: *CommentNode,
+  fn_def: *FnDefNode,
+  fn_call: *FnCallNode
+})
+
+ScopeNode = @record{
+  content: string,
+  children: sequence(StmtNode)
+}
+## copy_base_node_fields(ScopeNode)
+
+local ParseScopeResult = @Result(*ScopeNode, ErrLoc)
+local Parser.parse_scope: function(self: *Parser, scope: *ScopeNode, till: TokenKind): ParseScopeResult
+
+function Parser:parse_curly_scope(scope: *ScopeNode): ParseScopeResult
+  assert(scope)
+
+  local result: *ScopeNode = new(ScopeNode)
+  result.scope = scope
+
+  local expect_result = self:expect(TokenKind.OPEN_CURLY)
+  if expect_result:is_err() then
+    return ParseScopeResult.err(expect_result:get_err())
+  end
+  local s_token = expect_result:get_ok()
+  result.s_pos = s_token.s_pos
+  result.s_index = s_token.s_index
+
+  local parse_result = self:parse_scope(result, TokenKind.CLOSE_CURLY)
+  if parse_result:is_err() then
+    return ParseScopeResult.err(parse_result:get_err())
+  end
+
+  expect_result = self:expect(TokenKind.CLOSE_CURLY)
+  if expect_result:is_err() then
+    return ParseScopeResult.err(expect_result:get_err())
+  end
+  local e_token = expect_result:get_ok()
+  result.e_pos = e_token.e_pos
+  result.e_index = e_token.e_index
+
+  result.content = self.content:sub(result.s_index, result.e_index + 1)
+
+  return ParseScopeResult.ok(result)
+end
+
+local ParseFnDefResult = @Result(*FnDefNode, ErrLoc)
+function Parser:parse_fn_def(scope: *ScopeNode): ParseFnDefResult
+  assert(scope)
+
+  local result: *FnDefNode = new(FnDefNode)
+
+  local expect_result = self:expect(TokenKind.KEYWORD_FN)
+  if expect_result:is_err() then
+    return ParseFnDefResult.err(expect_result:get_err())
+  end
+  local s_token = expect_result:get_ok()
+  result.s_pos = s_token.s_pos
+  result.s_index = s_token.s_index
+
+  expect_result = self:expect(TokenKind.IDENTIFIER)
+  if expect_result:is_err() then
+    return ParseFnDefResult.err(expect_result:get_err())
+  end
+  result.name = expect_result:get_ok().val
+
+  expect_result = self:expect(TokenKind.OPEN_PAREN)
+  if expect_result:is_err() then
+    return ParseFnDefResult.err(expect_result:get_err())
+  end
+
+  --TODO: Function Parameters
+
+  expect_result = self:expect(TokenKind.CLOSE_PAREN)
+  if expect_result:is_err() then
+    return ParseFnDefResult.err(expect_result:get_err())
+  end
+
+  expect_result = self:expect(TokenKind.COLON)
+  if expect_result:is_err() then
+    return ParseFnDefResult.err(expect_result:get_err())
+  end
+
+  expect_result = self:expect(TokenKind.IDENTIFIER)
+  if expect_result:is_err() then
+    return ParseFnDefResult.err(expect_result:get_err())
+  end
+
+  local parse_result = self:parse_curly_scope(scope)
+  if parse_result:is_err() then
+    return ParseFnDefResult.err(parse_result:get_err())
+  end
+
+  -- TODO: Parse returns
+
+  result.body = parse_result:get_ok()
+
+  return ParseFnDefResult.ok(result)
+end
+
+local ParseFnCallResult = @Result(*FnCallNode, ErrLoc)
+function Parser:parse_fn_call(scope: *ScopeNode): ParseFnCallResult
+  local result = new(FnCallNode)
+
+  local s_token = self:peek()
+  if s_token.val == "print" then
+    result.name = self:advance().val
+
+    local expect_result = self:expect(TokenKind.OPEN_PAREN)
+    if expect_result:is_err() then
+      return ParseFnCallResult.err(expect_result:get_err())
+    end
+
+    expect_result = self:expect(TokenKind.STRING)
+    if expect_result:is_err() then
+      return ParseFnCallResult.err(expect_result:get_err())
+    end
+    local str = expect_result:get_ok().val
+
+    local expect_result = self:expect(TokenKind.CLOSE_PAREN)
+    if expect_result:is_err() then
+      return ParseFnCallResult.err(expect_result:get_err())
+    end
+
+    result.args:push(ExprNode.str_lit({ content = str, len = #str }))
+  else
+    error("TODO: Parser:parse_fn_call")
+  end
+  return ParseFnCallResult.ok(result)
+end
+
+Parser.parse_scope = function(self: *Parser, scope: *ScopeNode, till: TokenKind): ParseScopeResult
+  assert(till > TokenKind._UNDEFINED)
+  assert(till < TokenKind._COUNT)
+
+  local token = self:peek()
+  if token.kind == till then
+    return ParseScopeResult.ok(scope)
+  end
+
+  local stmt_node: StmtNode
+  if token.kind == TokenKind.COMMENT then
+    self:advance()
+    local comment_node: *CommentNode = new(CommentNode)
+    $comment_node = {
+      s_pos = token.s_pos,
+      e_pos = token.e_pos,
+      s_index = token.s_index,
+      e_index = token.e_index,
+      content = token.val,
+      scope = scope,
+    }
+    stmt_node = StmtNode.comment(comment_node)
+  elseif token.kind == TokenKind.IDENTIFIER then
+    if self:peek_next().kind == TokenKind.OPEN_PAREN then
+      local parse_fn_call_result = self:parse_fn_call(scope)
+      if parse_fn_call_result:is_err() then
+        return ParseScopeResult.err(parse_fn_call_result:get_err())
+      end
+    stmt_node = StmtNode.fn_call(parse_fn_call_result:get_ok())
+    -- elseif self:peek_next().kind == TokenKind.COLON then
+    --   stmt_node = self:parse_id_decl(scope)
+    -- elseif self:peek_next().kind == TokenKind.EQUALS then
+    --   stmt_node = self:parse_assignment(scope)
+    else
+      error(("Unexpected Token: %s('%s')"):format(TokenKind_tostring(token.kind), token.val))
+    end
+  elseif token.kind == TokenKind.KEYWORD_WHILE then
+    -- self:parse_while_loop(scope)
+  elseif token.kind == TokenKind.KEYWORD_BREAK then
+    -- TODO: Assert that break is the child of a loop
+    -- self:advance()
+    -- local node: *Node = new(Node)
+    -- $node = {
+    --   s_pos = {
+    --     line = token.s_pos.line,
+    --     col = token.s_pos.col,
+    --   },
+    --   e_pos = {
+    --     line = token.e_pos.line,
+    --     col = token.e_pos.col,
+    --   },
+    --   s_index = token.s_index,
+    --   e_index = token.e_index,
+    --   kind = NodeKind.BREAK,
+    --   scope = scope,
+    -- }
+    -- stmt_node = ParseResult.ok(node)
+  elseif token.kind == TokenKind.KEYWORD_RETURN then
+    -- self:advance()
+    -- local node: *Node = new(Node)
+    -- local _node: Node = $node
+    -- _node = {
+    --   s_pos = {
+    --     line = token.s_pos.line,
+    --     col = token.s_pos.col,
+    --   },
+    --   s_index = token.s_index,
+    --   kind = NodeKind.RETURN,
+    --   scope = scope,
+    -- }
+
+    -- local ret_value: *Node
+    -- if self:peek().kind ~= TokenKind.CLOSE_CURLY then
+    --   local parse_result = self:parse_expr(scope)
+    --   bin_op_nodes:clear()
+    --   if parse_result:is_err() then
+    --     in parse_result
+    --   end
+    --   ret_value = parse_result:get_ok()
+    -- end
+    -- local token = self:peek_prev()
+
+    -- _node.e_pos = {
+    --   line = token.e_pos.line,
+    --   col = token.e_pos.col,
+    -- }
+    -- _node.val = ret_value
+    -- _node.e_index = token.e_index
+    -- $node = _node
+    -- stmt_node = ParseResult.ok(node)
+  elseif token.kind == TokenKind.KEYWORD_FN then
+    local result = self:parse_fn_def(scope)
+    if result:is_err() then
+      return ParseScopeResult.err(result:get_err())
+    end
+    stmt_node = StmtNode.fn_def(result:get_ok())
+  elseif token.kind == TokenKind.KEYWORD_STRUCT then
+    -- self:parse_rec_def(scope)
+  else
+    error(("Unexpected Token: '%s'"):format(TokenKind_tostring(token.kind)))
+  end
+
+  scope.children:push(stmt_node)
+
+  return self:parse_scope(scope, till)
+end
+
+function Parser:parse(): ParseScopeResult
+  local ast = new(ScopeNode)
+  local s_pos = Pos.index_to_pos(1, self.content)
+  local e_pos = Pos.index_to_pos(#self.content, self.content)
+  $ast = {
+    s_pos = s_pos,
+    e_pos = e_pos,
+    s_index = 1,
+    e_index = #self.content,
+    scope = nilptr,
+
+    content = self.content,
+  }
+  local result = self:parse_scope(ast, TokenKind.EOF)
+  if result:is_err() then
+    return ParseScopeResult.err(result:get_err())
+  end
+  local ast = result:get_ok()
+
+  local main_found = false
+
+  for _, child in ipairs(ast.children) do
+    if child:is_fn_def() and child:get_fn_def().name == "main" then
+      main_found = true
+      break
+    end
+  end
+
+  if not main_found then
+    io.stderr:write("No main function found")
+    os.exit(1)
+  end
+
+  return result
+end
+
+local Parser.ScopeNode = ScopeNode
+local Parser.BaseNode = BaseNode
+local Parser.CommentNode = CommentNode
+local Parser.FnDefNode = FnDefNode
+local Parser.FnCallNode = FnCallNode
+local Parser.StrLitNode = StrLitNode
+local Parser.ExprNode = ExprNode
+local Parser.StmtNode = StmtNode
+
+return Parser

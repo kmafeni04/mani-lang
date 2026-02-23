@@ -9,6 +9,29 @@
 
 ---@type Package
 return {
-  dependencies = {},
-  scripts = {}
+  dependencies = {
+    {
+      name = "nargs",
+      repo = "https://github.com/kmafeni04/nargs",
+      version = "#a0a997120acad6c6f58f3bdf3706242cf2443ab5",
+    },
+    {
+      name = "ansicolor-nelua",
+      repo = "https://github.com/kmafeni04/ansicolor-nelua",
+      version = "#82d3d7e1154316ca75c7a52c4f17eb2d67add499",
+    },
+    {
+      name = "variant-nelua",
+      repo = "https://github.com/kmafeni04/variant-nelua",
+      version = "#c1dbeb2a1daa86d88a38deb24416b66149161e65",
+    },
+    {
+      name = "map-nelua",
+      repo = "https://github.com/kmafeni04/map-nelua",
+      version = "#74f7d0ebbf5057ba202f2659d25c75b225b17d7d",
+    },
+  },
+  scripts = {
+    dev = "nlpm run nelua main.nelua -- main.mani",
+  },
 }

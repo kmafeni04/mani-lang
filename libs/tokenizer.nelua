@@ -1,0 +1,495 @@
+require ".range_check"
+
+local varaint = require "variant-nelua.variant"
+local Result = varaint.Result
+local Option = varaint.Option
+
+local ErrLoc = require ".errloc"
+local ErrLocKind = ErrLoc.ErrLocKind
+
+local Pos = require ".pos"
+
+local TokenKind = @enum{
+  _UNDEFINED = 0,
+  CLOSE_ANGLE,
+  CLOSE_BRACKET,
+  CLOSE_CURLY,
+  CLOSE_PAREN,
+  COLON,
+  COMMA,
+  COMMENT,
+  CONSTANT_FALSE,
+  CONSTANT_NIL,
+  CONSTANT_TRUE,
+  DOT,
+  EOF,
+  EQUALS,
+  IDENTIFIER,
+  KEYWORD_BREAK,
+  KEYWORD_FOR,
+  KEYWORD_FN,
+  KEYWORD_STRUCT,
+  KEYWORD_RETURN,
+  KEYWORD_WHILE,
+  MINUS,
+  NUMBER,
+  OPEN_ANGLE,
+  OPEN_BRACKET,
+  OPEN_CURLY,
+  OPEN_PAREN,
+  PLUS,
+  STAR,
+  STRING,
+  _COUNT
+}
+
+local Token = @record{
+  kind: TokenKind,
+  val: string,
+  s_pos: Pos,
+  e_pos: Pos,
+  s_index: integer,
+  e_index: integer
+}
+
+local tokenizer = @record{}
+
+local tokenizer.TokenKind = TokenKind
+local tokenizer.Token = Token
+
+assert(TokenKind._COUNT == 30)
+function tokenizer.TokenKind_tostring(kind: TokenKind): string
+  range_check!(kind, TokenKind)
+  switch kind do
+    case TokenKind.CLOSE_ANGLE then
+      return ">"
+    case TokenKind.CLOSE_BRACKET then
+      return "]"
+    case TokenKind.CLOSE_CURLY then
+      return "}"
+    case TokenKind.CLOSE_PAREN then
+      return ")"
+    case TokenKind.COLON then
+      return ":"
+    case TokenKind.COMMA then
+      return ","
+    case TokenKind.COMMENT then
+      return "COMMENT"
+    case TokenKind.CONSTANT_FALSE then
+      return "false"
+    case TokenKind.CONSTANT_NIL then
+      return "nil"
+    case TokenKind.CONSTANT_TRUE then
+      return "true"
+    case TokenKind.DOT then
+      return "."
+    case TokenKind.EOF then
+      return "EOF"
+    case TokenKind.EQUALS then
+      return "="
+    case TokenKind.IDENTIFIER then
+      return "IDENTIFIER"
+    case TokenKind.KEYWORD_BREAK then
+      return "break"
+    case TokenKind.KEYWORD_FOR then
+      return "for"
+    case TokenKind.KEYWORD_FN then
+      return "fn"
+    case TokenKind.KEYWORD_STRUCT then
+      return "struct"
+    case TokenKind.KEYWORD_RETURN then
+      return "return"
+    case TokenKind.KEYWORD_WHILE then
+      return "while"
+    case TokenKind.MINUS then
+      return "-"
+    case TokenKind.NUMBER then
+      return "NUMBER"
+    case TokenKind.OPEN_ANGLE then
+      return "<"
+    case TokenKind.OPEN_BRACKET then
+      return "["
+    case TokenKind.OPEN_CURLY then
+      return "{"
+    case TokenKind.OPEN_PAREN then
+      return "("
+    case TokenKind.PLUS then
+      return "+"
+    case TokenKind.STAR then
+      return "*"
+    case TokenKind.STRING then
+      return "STRING"
+    else
+      ## for _, field in ipairs(TokenKind.value.fields) do
+        if #[field.value]# == kind then
+          error(("Unhandled TokenKind '%s'"):format(#[field.name]#))
+        end
+      ## end
+  end
+  error("UNREACHABLE")
+  return ""
+end
+##[[
+]]
+
+
+local TokenizeResult = @Result(sequence(Token), ErrLoc)
+
+assert(TokenKind._COUNT == 30)
+function tokenizer.tokenize(path: string, content: string): TokenizeResult
+  local tokens: sequence(Token)
+  local index = 1
+
+  while index <= #content do
+    local prev_char = content:sub(index - 1, index - 1)
+    local current_char = content:sub(index, index)
+    local next_char = content:sub(index + 1, index + 1)
+
+    if current_char:match("%s") then
+      -- Skip white space
+    elseif current_char == "/" and next_char == "/" then
+      local start = index
+      local s_pos = Pos.index_to_pos(start, content)
+      local sb: stringbuilder
+      sb:write(current_char)
+      while next_char ~= "\n" do
+        index = index + 1
+        sb:write(next_char)
+        next_char = content:sub(index + 1, index + 1)
+      end
+      local e_pos = Pos.index_to_pos(index, content)
+      local val = sb:promote()
+      tokens:push({
+        kind = TokenKind.COMMENT,
+        val = val,
+        s_pos = s_pos,
+        e_pos = e_pos,
+        s_index = start,
+        e_index = index,
+      })
+    elseif current_char == '"' then
+      local start = index
+      local sb: stringbuilder
+      index = index + 1
+      while index <= #content and next_char ~= '"' do
+        current_char = content:sub(index, index)
+        next_char = content:sub(index + 1, index + 1)
+        sb:write(current_char)
+        index = index + 1
+      end
+      local s_pos = Pos.index_to_pos(start, content)
+      local e_pos = Pos.index_to_pos(index, content)
+      local val = sb:promote()
+      tokens:push({
+        kind = TokenKind.STRING,
+        val = val,
+        s_pos = s_pos,
+        e_pos = e_pos,
+        s_index = start,
+        e_index = index,
+      })
+    elseif current_char == "*" then
+      local pos = Pos.index_to_pos(index, content)
+      tokens:push({
+        kind = TokenKind.STAR,
+        val = current_char,
+        s_pos = pos,
+        e_pos = pos,
+        s_index = index,
+        e_index = index,
+      })
+    elseif current_char == "." then
+      local pos = Pos.index_to_pos(index, content)
+      tokens:push({
+        kind = TokenKind.DOT,
+        val = current_char,
+        s_pos = pos,
+        e_pos = pos,
+        s_index = index,
+        e_index = index,
+      })
+    elseif current_char == "[" then
+      local pos = Pos.index_to_pos(index, content)
+      tokens:push({
+        kind = TokenKind.OPEN_BRACKET,
+        val = current_char,
+        s_pos = pos,
+        e_pos = pos,
+        s_index = index,
+        e_index = index,
+      })
+    elseif current_char == "]" then
+      local pos = Pos.index_to_pos(index, content)
+      tokens:push({
+        kind = TokenKind.CLOSE_BRACKET,
+        val = current_char,
+        s_pos = pos,
+        e_pos = pos,
+        s_index = index,
+        e_index = index,
+      })
+    elseif current_char == "<" then
+      local pos = Pos.index_to_pos(index, content)
+      tokens:push({
+        kind = TokenKind.OPEN_ANGLE,
+        val = current_char,
+        s_pos = pos,
+        e_pos = pos,
+        s_index = index,
+        e_index = index,
+      })
+    elseif current_char == ">" then
+      local pos = Pos.index_to_pos(index, content)
+      tokens:push({
+        kind = TokenKind.CLOSE_ANGLE,
+        val = current_char,
+        s_pos = pos,
+        e_pos = pos,
+        s_index = index,
+        e_index = index,
+      })
+    elseif current_char == "{" then
+      local pos = Pos.index_to_pos(index, content)
+      tokens:push({
+        kind = TokenKind.OPEN_CURLY,
+        val = current_char,
+        s_pos = pos,
+        e_pos = pos,
+        s_index = index,
+        e_index = index,
+      })
+    elseif current_char == "}" then
+      local pos = Pos.index_to_pos(index, content)
+      tokens:push({
+        kind = TokenKind.CLOSE_CURLY,
+        val = current_char,
+        s_pos = pos,
+        e_pos = pos,
+        s_index = index,
+        e_index = index,
+      })
+    elseif current_char == "(" then
+      local pos = Pos.index_to_pos(index, content)
+      tokens:push({
+        kind = TokenKind.OPEN_PAREN,
+        val = current_char,
+        s_pos = pos,
+        e_pos = pos,
+        s_index = index,
+        e_index = index,
+      })
+    elseif current_char == "," then
+      local pos = Pos.index_to_pos(index, content)
+      tokens:push({
+        kind = TokenKind.COMMA,
+        val = current_char,
+        s_pos = pos,
+        e_pos = pos,
+        s_index = index,
+        e_index = index,
+      })
+    elseif current_char == ":" then
+      local pos = Pos.index_to_pos(index, content)
+      tokens:push({
+        kind = TokenKind.COLON,
+        val = current_char,
+        s_pos = pos,
+        e_pos = pos,
+        s_index = index,
+        e_index = index,
+      })
+    elseif current_char == ")" then
+      local pos = Pos.index_to_pos(index, content)
+      tokens:push({
+        kind = TokenKind.CLOSE_PAREN,
+        val = current_char,
+        s_pos = pos,
+        e_pos = pos,
+        s_index = index,
+        e_index = index,
+      })
+    elseif current_char:match("[%a_]") then
+      local sb: stringbuilder
+      sb:write(current_char)
+      local start = index
+      index = index + 1
+      while index <= #content do
+        local new_c = content:sub(index, index)
+        if not new_c:match("[%w_]") then
+          index = index - 1
+          break
+        end
+        sb:write(new_c)
+        index = index + 1
+      end
+      local word = sb:promote()
+      local s_pos = Pos.index_to_pos(start, content)
+      local e_pos = Pos.index_to_pos(index, content)
+      local ttype
+      if word == "struct" then
+        ttype = TokenKind.KEYWORD_STRUCT
+      elseif word == "fn" then
+        ttype = TokenKind.KEYWORD_FN
+      elseif word == "while" then
+        ttype = TokenKind.KEYWORD_WHILE
+      elseif word == "for" then
+        ttype = TokenKind.KEYWORD_FOR
+      elseif word == "break" then
+        ttype = TokenKind.KEYWORD_BREAK
+      elseif word == "return" then
+        ttype = TokenKind.KEYWORD_RETURN
+
+      elseif word == "true" then
+        ttype = TokenKind.CONSTANT_TRUE
+      elseif word == "false" then
+        ttype = TokenKind.CONSTANT_FALSE
+      elseif word == "nil" then
+        ttype = TokenKind.CONSTANT_NIL
+
+      else
+        ttype = TokenKind.IDENTIFIER
+      end
+      tokens:push({
+        kind = ttype,
+        val = word,
+        s_pos = s_pos,
+        e_pos = e_pos,
+        s_index = start,
+        e_index = index,
+      })
+    elseif current_char == "=" then
+      local pos = Pos.index_to_pos(index, content)
+      tokens:push({
+        kind = TokenKind.EQUALS,
+        val = current_char,
+        s_pos = pos,
+        e_pos = pos,
+        s_index = index,
+        e_index = index,
+      })
+    elseif current_char:match("[%d]") then
+      local start = index
+      local val = current_char
+      local decimal = false
+      local exponent = false
+      local after_exp = false
+      local err = false
+      while next_char:match("[%d%.eE%-%+]") do
+        if next_char == "." then
+          if decimal then
+            err = true
+            break
+          end
+          decimal = true
+        elseif next_char:match("[eE]") then
+          if exponent then
+            err = true
+            break
+          end
+          exponent = true
+          after_exp = true
+        elseif not exponent and next_char:match("[%+%-]") then
+          goto end_label
+        elseif after_exp and next_char:match("[^%-%+%d]") then
+          err = true
+          break
+        end
+        val = val .. next_char
+        index = index + 1
+        next_char = content:sub(index + 1, index + 1)
+      end
+      if (current_char == "-" or current_char == "+") and #val == 1 then
+        err = true
+      end
+      if val:match("^0%d") then
+        err = true
+      end
+      ::end_label::
+      if err then
+        local s_pos = Pos.index_to_pos(start, content)
+        local e_pos = Pos.index_to_pos(index, content)
+        local token = content:sub(start, index)
+        return TokenizeResult.err({
+          path = path,
+          content = content,
+          s_index = start,
+          e_index = index,
+          err = ("Malformed number '%s'"):format(token),
+          kind = ErrLocKind.SYNTAX,
+          s_pos = s_pos,
+          e_pos = e_pos,
+        })
+      else
+        local s_pos = Pos.index_to_pos(start, content)
+        local e_pos = Pos.index_to_pos(index, content)
+        tokens:push({
+          kind = TokenKind.NUMBER,
+          val = val,
+          s_pos = s_pos,
+          e_pos = e_pos,
+          s_index = start,
+          e_index = index,
+        })
+      end
+    elseif current_char == "+" then
+      local pos = Pos.index_to_pos(index, content)
+      tokens:push({
+        kind = TokenKind.PLUS,
+        val = current_char,
+        s_pos = pos,
+        e_pos = pos,
+        s_index = index,
+        e_index = index,
+      })
+    elseif current_char == "-" then
+      local pos = Pos.index_to_pos(index, content)
+      tokens:push({
+        kind = TokenKind.MINUS,
+        val = current_char,
+        s_pos = pos,
+        e_pos = pos,
+        s_index = index,
+        e_index = index,
+      })
+    else
+      local pos = Pos.index_to_pos(index, content)
+      return TokenizeResult.err({
+          path = path,
+          s_index = index,
+          e_index = index,
+          content = content,
+          err = ("Unknown token '%s'"):format(current_char),
+          kind = ErrLocKind.SYNTAX,
+          s_pos = pos,
+          e_pos = pos,
+        })
+    end
+    index = index + 1
+  end
+  local pos = Pos.index_to_pos(#content, content)
+  tokens:push({
+    kind = TokenKind.EOF,
+    val = "",
+    s_pos = pos,
+    e_pos = pos,
+    s_index = #content,
+    e_index = #content,
+  })
+
+  return TokenizeResult.ok(tokens)
+end
+
+function tokenizer.tokens_tostring(tokens: sequence(Token)): string
+  local sb: stringbuilder
+  sb:write("[ ")
+  if #tokens > 0 then
+    for _, token in ipairs(tokens) do
+      sb:write(tokenizer.TokenKind_tostring(token.kind), ", ")
+    end
+    sb:rollback(#(", "))
+  end
+  sb:write(" ]")
+  return sb:promote()
+end
+
+return tokenizer

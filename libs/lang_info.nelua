@@ -1,0 +1,5 @@
+local lang_info = @record{}
+
+local lang_info.LANG_NAME <comptime> = "mani"
+
+return lang_info

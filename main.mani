@@ -1,0 +1,5 @@
+// Hello world
+fn main(): void {
+  print("hello world")
+  // return
+}

@@ -1,0 +1,25 @@
+local variant = require "variant-nelua.variant"
+local Sum = variant.Sum
+local Result = variant.Result
+local Option = variant.Option
+
+local Parser = require ".parser"
+local ErrLoc = require ".errloc"
+
+
+local Cgen = @record{
+  ast: *Parser.ScopeNode
+}
+
+function Cgen:gen(): string
+  return ""
+end
+
+local Cgen.NewResult = @Result(Cgen, ErrLoc)
+function Cgen.new(ast: *Parser.ScopeNode): Cgen.NewResult
+  assert(ast)
+  error()
+  return
+end
+
+return Cgen

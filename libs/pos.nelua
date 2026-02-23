@@ -1,0 +1,18 @@
+local Pos = @record{
+  line: uinteger,
+  col: uinteger
+}
+
+function Pos.index_to_pos(index: integer, content: string): Pos
+  local s_line = 1
+  local index_at_line = 0
+  local text = content:sub(1, index)
+  for line in text:gmatch("[^\r\n]*\r?\n") do
+    index_at_line = index_at_line + #line
+    s_line = s_line + 1
+  end
+  local s_col = index - index_at_line
+  return { s_line, s_col }
+end
+
+return Pos

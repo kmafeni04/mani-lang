@@ -1,1 +1,69 @@
-print("hello world")
+require "arg"
+require "io"
+require "os"
+
+local nargs = require "nargs.nargs"
+
+local Parser = require ".libs.parser"
+local Cgen = require ".libs.cgen"
+
+local parser = nargs.new({ name = "mani" })
+parser:pos_arg({ "input", "Input file", max_len = 1 })
+parser:opt({ "output", "o", help = "Binary output path", max_len = 1 })
+
+local args = parser:parse(arg)
+
+if #arg == 0 then
+  io.stderr:write(parser:get_help(), "\n")
+  os.exit(1)
+end
+
+local input = args["input"]:get_pos_arg()
+local output = args["output"]:get_opt()
+
+if input[1] == "" then
+  io.stderr:write(parser:get_help(), "\n")
+  io.stderr:write("ERROR: Input file path is required\n")
+  os.exit(1)
+end
+
+if not input[1]:match("%.mani$") then
+  io.stderr:write("ERROR: Input file must have extension '.mani', got '", input[1], "'\n")
+  os.exit(1)
+end
+
+if output[1] == "" then
+  output[1] = "./" .. input[1]:sub(1, #input[1] - #(".mani"))
+end
+
+local input_file = io.open(input[1], "r")
+if not input_file:isopen() then
+  io.stderr:write("ERROR: Failed to read input file '", input[1], "'\n")
+  os.exit(1)
+end
+local input_file_text = input_file:read("a")
+input_file:close()
+
+local new_parser_result = Parser.new(input[1], input_file_text)
+if new_parser_result:is_err() then
+  io.stderr:write(new_parser_result:get_err():tostring())
+  os.exit(1)
+end
+local parser = new_parser_result:get_ok()
+
+local parse_result = parser:parse()
+if parse_result:is_err() then
+  io.stderr:write(parse_result:get_err():tostring())
+  os.exit(1)
+end
+
+local ast = parse_result:get_ok()
+
+local cgen_result = Cgen.new(ast)
+if cgen_result:is_err() then
+  io.stderr:write(cgen_result:get_err():tostring())
+  os.exit(1)
+end
+
+local cgen = cgen_result:get_ok()
+local c_code = cgen:gen()

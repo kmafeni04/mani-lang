@@ -1,0 +1,4 @@
+## function range_check(val, enum_type)
+  assert(#[val]# > 0)
+  assert(#[val]# < #[enum_type]#._COUNT)
+## end
