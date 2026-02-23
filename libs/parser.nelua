@@ -308,6 +308,7 @@ local StmtNode = @Sum(record{
 })
 
 ScopeNode = @record{
+  path: string,
   content: string,
   children: sequence(StmtNode)
 }
@@ -320,6 +321,7 @@ function Parser:parse_curly_scope(scope: *ScopeNode): ParseScopeResult
   assert(scope)
 
   local result: *ScopeNode = new(ScopeNode)
+  result.path = scope.path
   result.scope = scope
 
   local expect_result = self:expect(TokenKind.OPEN_CURLY)
@@ -353,6 +355,7 @@ function Parser:parse_fn_def(scope: *ScopeNode): ParseFnDefResult
   assert(scope)
 
   local result: *FnDefNode = new(FnDefNode)
+  result.scope = scope
 
   local expect_result = self:expect(TokenKind.KEYWORD_FN)
   if expect_result:is_err() then
@@ -389,6 +392,7 @@ function Parser:parse_fn_def(scope: *ScopeNode): ParseFnDefResult
   if expect_result:is_err() then
     return ParseFnDefResult.err(expect_result:get_err())
   end
+  result.return_type = expect_result:get_ok().val
 
   local parse_result = self:parse_curly_scope(scope)
   if parse_result:is_err() then
@@ -545,6 +549,8 @@ function Parser:parse(): ParseScopeResult
   local s_pos = Pos.index_to_pos(1, self.content)
   local e_pos = Pos.index_to_pos(#self.content, self.content)
   $ast = {
+    path = self.path,
+
     s_pos = s_pos,
     e_pos = e_pos,
     s_index = 1,

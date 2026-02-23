@@ -1,5 +1,6 @@
 local lang_info = @record{}
 
-local lang_info.LANG_NAME <comptime> = "mani"
+local lang_info.NAME <comptime> = "mani"
+local lang_info.VERSION <comptime> = "0.0.1"
 
 return lang_info

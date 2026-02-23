@@ -5,21 +5,153 @@ local Option = variant.Option
 
 local Parser = require ".parser"
 local ErrLoc = require ".errloc"
+local lang_info = require ".lang_info"
 
 
 local Cgen = @record{
-  ast: *Parser.ScopeNode
+  ast: *Parser.ScopeNode,
+  includes: hashmap(string, boolean),
 }
 
-function Cgen:gen(): string
-  return ""
+local Cgen.gen_scope: function(self: *Cgen, scope: *Parser.ScopeNode): string
+
+function Cgen:gen_fn_def(node: *Parser.FnDefNode): string
+  assert(node)
+
+  local sb: stringbuilder
+
+  sb:write(node.return_type, " ")
+
+  local fn_name: string
+  if node.name == "main" then
+    fn_name = "main"
+  else
+    local name_matched, name_seq = node.scope.path:match("/?(.-)%.mani")
+    assert(name_matched)
+    fn_name = name_seq[1] .. "_" .. node.name
+  end
+  sb:write(fn_name, "() {\n")
+  local fn_body = self:gen_scope(node.body)
+  sb:write(fn_body)
+  sb:write("\n}")
+  return sb:promote()
 end
 
-local Cgen.NewResult = @Result(Cgen, ErrLoc)
-function Cgen.new(ast: *Parser.ScopeNode): Cgen.NewResult
-  assert(ast)
-  error()
+function Cgen:gen_expr(node: Parser.ExprNode): string
+  if node:is_str_lit() then
+    local str = node:get_str_lit()
+    return "((" .. lang_info.NAME .. "_string){" .. '"' .. str.content .. '",' .. str.len .. "})"
+  else
+    error(("Unhandled expr type: %s"):format(node:is()))
+  end
+  error("UNREACHABLE")
   return
+end
+
+function Cgen:gen_fn_call(node: *Parser.FnCallNode): string
+  assert(node)
+
+  local sb: stringbuilder
+
+  if node.name == "print" then
+    self.includes["stdio.h"] = true
+
+    sb:write("printf(")
+    for i, arg in ipairs(node.args) do
+      sb:write(self:gen_expr(arg))
+      if i < #node.args then
+        sb:write(", ")
+      end
+    end
+    sb:write(")")
+  else
+    error()
+  end
+  return sb:promote()
+end
+
+Cgen.gen_scope = function(self: *Cgen, scope: *Parser.ScopeNode): string
+  assert(scope)
+
+  local sb: stringbuilder
+  for _, child in ipairs(scope.children) do
+    if child:is_comment() then
+      -- do nothing
+    elseif child:is_fn_def() then
+      sb:write(self:gen_fn_def(child:get_fn_def()))
+    elseif child:is_fn_call() then
+      sb:write(self:gen_fn_call(child:get_fn_call()), ";")
+    else
+      error( ("Unhandle node type: %s"):format(child:is()) )
+    end
+  end
+  return sb:promote()
+end
+
+function Cgen:gen(): string
+  local sb: stringbuilder
+  sb:write([[#if defined(__clang__) && __clang_major__ >= 3
+  #pragma clang diagnostic ignored "-Wtype-limits"
+  #pragma clang diagnostic ignored "-Wwrite-strings"
+  #pragma clang diagnostic ignored "-Wunused"
+  #pragma clang diagnostic ignored "-Wunused-parameter"
+  #pragma clang diagnostic ignored "-Wmissing-field-initializers"
+  #pragma clang diagnostic ignored "-Wparentheses-equality"
+  #pragma clang diagnostic ignored "-Wtautological-compare"
+  #pragma clang diagnostic ignored "-Wmissing-braces"
+  #ifndef __cplusplus
+    #pragma clang diagnostic ignored "-Wincompatible-pointer-types"
+    #pragma clang diagnostic error   "-Wimplicit-function-declaration"
+    #pragma clang diagnostic error   "-Wimplicit-int"
+  #else
+    #pragma clang diagnostic ignored "-Wnarrowing"
+    #pragma clang diagnostic ignored "-Wc99-designator"
+  #endif
+#elif defined(__GNUC__) && __GNUC__ >= 5
+  #pragma GCC diagnostic ignored "-Wtype-limits"
+  #pragma GCC diagnostic ignored "-Wwrite-strings"
+  #pragma GCC diagnostic ignored "-Wunused-parameter"
+  #pragma GCC diagnostic ignored "-Wunused-value"
+  #pragma GCC diagnostic ignored "-Wunused-variable"
+  #pragma GCC diagnostic ignored "-Wunused-function"
+  #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+  #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+  #ifndef __cplusplus
+    #pragma GCC diagnostic ignored "-Wmissing-braces"
+    #pragma GCC diagnostic ignored "-Wincompatible-pointer-types"
+    #pragma GCC diagnostic ignored "-Wdiscarded-qualifiers"
+    #pragma GCC diagnostic error   "-Wimplicit-function-declaration"
+    #pragma GCC diagnostic error   "-Wimplicit-int"
+  #else
+    #pragma GCC diagnostic ignored "-Wnarrowing"
+  #endif
+#endif
+#if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
+  #define _CRT_SECURE_NO_WARNINGS
+#endif
+]])
+
+  self.includes["stdint.h"] = true
+  local body = self:gen_scope(self.ast)
+
+  for k in pairs(self.includes) do
+    sb:write("#include <", k, ">\n")
+  end
+
+  sb:write("\ntypedef struct {\n char* content;\n uint64_t len;\n} ", lang_info.NAME, "_string;\n" )
+
+  sb:write("\n", body)
+
+return sb:promote()
+end
+
+function Cgen.new(ast: *Parser.ScopeNode): *Cgen
+  assert(ast)
+
+  local cgen = new(Cgen)
+  cgen.ast = ast
+
+  return cgen
 end
 
 return Cgen

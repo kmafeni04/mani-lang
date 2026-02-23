@@ -10,6 +10,7 @@ local Cgen = require ".libs.cgen"
 local parser = nargs.new({ name = "mani" })
 parser:pos_arg({ "input", "Input file", max_len = 1 })
 parser:opt({ "output", "o", help = "Binary output path", max_len = 1 })
+parser:flag({ "run", "r", "Run the executable immediately after building" })
 
 local args = parser:parse(arg)
 
@@ -20,6 +21,7 @@ end
 
 local input = args["input"]:get_pos_arg()
 local output = args["output"]:get_opt()
+local run = args["run"]:get_flag()
 
 if input[1] == "" then
   io.stderr:write(parser:get_help(), "\n")
@@ -59,11 +61,14 @@ end
 
 local ast = parse_result:get_ok()
 
-local cgen_result = Cgen.new(ast)
-if cgen_result:is_err() then
-  io.stderr:write(cgen_result:get_err():tostring())
-  os.exit(1)
-end
-
-local cgen = cgen_result:get_ok()
+local cgen = Cgen.new(ast)
 local c_code = cgen:gen()
+
+local temp_file = io.open(output[1] .. ".c", "w")
+assert(temp_file:isopen())
+temp_file:write(c_code)
+temp_file:close()
+os.execute("cc " .. output[1] .. ".c -o " .. output[1])
+if run then
+  os.execute(output[1])
+end
