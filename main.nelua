@@ -68,7 +68,11 @@ local temp_file = io.open(output[1] .. ".c", "w")
 assert(temp_file:isopen())
 temp_file:write(c_code)
 temp_file:close()
-os.execute("cc " .. output[1] .. ".c -o " .. output[1])
+if not os.execute("cc " .. output[1] .. ".c -o " .. output[1]) then
+  os.exit(1)
+end
 if run then
-  os.execute(output[1])
+  if not os.execute(output[1]) then
+    os.exit(1)
+  end
 end

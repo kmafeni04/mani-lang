@@ -227,6 +227,36 @@ function Parser:advance_comma_until(token_kind: TokenKind): ExpectResult
   return ExpectResult.ok(token)
 end
 
+local PrimitiveType = @record{
+  name: string,
+  size: uinteger,
+  is_scalar: boolean,
+  is_integer: boolean,
+  is_float: boolean,
+  is_signed: boolean
+}
+
+local primitive_types: hashmap(string, PrimitiveType)
+
+local void_type: PrimitiveType = {
+  name = "void",
+  size = #void
+}
+primitive_types[void_type.name] = void_type
+
+local int64_type: PrimitiveType = {
+  name = "int64",
+  size = #int64,
+  is_scalar = true,
+  is_integer = true,
+  is_signed = true
+}
+primitive_types[int64_type.name] = int64_type
+
+local Type = @Sum(record{
+  primitive: PrimitiveType
+})
+
 local ScopeNode <forwarddecl> = @record{}
 
 local BaseNode = @record{
@@ -277,7 +307,7 @@ local CommentNode = @record{
 
 local FnDefNode = @record{
   name: string,
-  return_type: string, -- Temporary
+  return_type: Type,
   body: *ScopeNode
 }
 ## copy_base_node_fields(FnDefNode)
@@ -316,6 +346,17 @@ ScopeNode = @record{
 
 local ParseScopeResult = @Result(*ScopeNode, ErrLoc)
 local Parser.parse_scope: function(self: *Parser, scope: *ScopeNode, till: TokenKind): ParseScopeResult
+
+local ParseTypeResult = @Result(Type, ErrLoc)
+function Parser:parse_type(scope: *ScopeNode, type_name: string): ParseTypeResult
+  assert(scope)
+
+  if primitive_types:has(type_name) then
+    return ParseTypeResult.ok(Type.primitive(primitive_types[type_name]))
+  end
+  error("TODO: Parser:parse_type")
+  return
+end
 
 function Parser:parse_curly_scope(scope: *ScopeNode): ParseScopeResult
   assert(scope)
@@ -392,7 +433,11 @@ function Parser:parse_fn_def(scope: *ScopeNode): ParseFnDefResult
   if expect_result:is_err() then
     return ParseFnDefResult.err(expect_result:get_err())
   end
-  result.return_type = expect_result:get_ok().val
+  local type_result = self:parse_type(scope, expect_result:get_ok().val)
+  if type_result:is_err() then
+    return ParseFnDefResult.err(type_result:get_err())
+  end
+  result.return_type = type_result:get_ok()
 
   local parse_result = self:parse_curly_scope(scope)
   if parse_result:is_err() then
@@ -411,7 +456,7 @@ function Parser:parse_fn_call(scope: *ScopeNode): ParseFnCallResult
   local result = new(FnCallNode)
 
   local s_token = self:peek()
-  if s_token.val == "print" then
+  if s_token.val == "println" then
     result.name = self:advance().val
 
     local expect_result = self:expect(TokenKind.OPEN_PAREN)
@@ -590,5 +635,8 @@ local Parser.FnCallNode = FnCallNode
 local Parser.StrLitNode = StrLitNode
 local Parser.ExprNode = ExprNode
 local Parser.StmtNode = StmtNode
+
+local Parser.primitive_types = primitive_types
+local Parser.Type = Type
 
 return Parser

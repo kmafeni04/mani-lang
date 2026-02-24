@@ -15,12 +15,29 @@ local Cgen = @record{
 
 local Cgen.gen_scope: function(self: *Cgen, scope: *Parser.ScopeNode): string
 
+function Cgen:gen_type(typ: Parser.Type): string
+  if typ:is_primitive() then
+    local primitive = typ:get_primitive()
+    if primitive.is_integer then
+      self.includes["stdint.h"] = true
+    end
+    local name = primitive.name
+    if name == "void" then
+      return "void"
+    elseif name == "int64" then
+      return "int64_t"
+    end
+  end
+  error("TODO: Cgen:gen_type")
+  return
+end
+
 function Cgen:gen_fn_def(node: *Parser.FnDefNode): string
   assert(node)
 
   local sb: stringbuilder
 
-  sb:write(node.return_type, " ")
+  sb:write(self:gen_type(node.return_type), " ")
 
   local fn_name: string
   if node.name == "main" then
@@ -48,22 +65,21 @@ function Cgen:gen_expr(node: Parser.ExprNode): string
   return
 end
 
+function Cgen:gen_println(args: sequence(Parser.ExprNode)): string
+  self.includes["stdio.h"] = true
+  assert(args[1]:is_str_lit())
+  local sb: stringbuilder
+  sb:write('printf("', args[1]:get_str_lit().content, '\\n")')
+  return sb:promote()
+end
+
 function Cgen:gen_fn_call(node: *Parser.FnCallNode): string
   assert(node)
 
   local sb: stringbuilder
 
-  if node.name == "print" then
-    self.includes["stdio.h"] = true
-
-    sb:write("printf(")
-    for i, arg in ipairs(node.args) do
-      sb:write(self:gen_expr(arg))
-      if i < #node.args then
-        sb:write(", ")
-      end
-    end
-    sb:write(")")
+  if node.name == "println" then
+    sb:write(self:gen_println(node.args))
   else
     error()
   end
