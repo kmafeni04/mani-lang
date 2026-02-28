@@ -7,7 +7,6 @@ local Parser = require ".parser"
 local ErrLoc = require ".errloc"
 local lang_info = require ".lang_info"
 
-
 local Cgen = @record{
   ast: *Parser.ScopeNode,
   includes: hashmap(string, boolean),
@@ -58,6 +57,15 @@ function Cgen:gen_expr(node: Parser.ExprNode): string
   if node:is_str_lit() then
     local str = node:get_str_lit()
     return "((" .. lang_info.NAME .. "_string){" .. '"' .. str.content .. '",' .. str.len .. "})"
+  elseif node:is_number_lit() then
+    local num = node:get_number_lit()
+    return num.val
+  elseif node:is_paren() then
+    local paren = node:get_paren()
+    return "(" .. self:gen_expr(paren.val) .. ")"
+  elseif node:is_binary() then
+    local binary = node:get_binary()
+    return self:gen_expr(binary.left) .. " " .. binary.operator.val .. " " .. self:gen_expr(binary.right)
   else
     error(("Unhandled expr type: %s"):format(node:is()))
   end
@@ -90,15 +98,20 @@ Cgen.gen_scope = function(self: *Cgen, scope: *Parser.ScopeNode): string
   assert(scope)
 
   local sb: stringbuilder
-  for _, child in ipairs(scope.children) do
+  for i, child in ipairs(scope.children) do
     if child:is_comment() then
       -- do nothing
     elseif child:is_fn_def() then
       sb:write(self:gen_fn_def(child:get_fn_def()))
     elseif child:is_fn_call() then
       sb:write(self:gen_fn_call(child:get_fn_call()), ";")
+    elseif child:is_return_stmt() then
+      sb:write("return ", self:gen_expr(child:get_return_stmt().val), ";")
     else
       error( ("Unhandle node type: %s"):format(child:is()) )
+    end
+    if i ~= #scope.children then
+      sb:write("\n")
     end
   end
   return sb:promote()
@@ -117,6 +130,7 @@ function Cgen:gen(): string
   #pragma clang diagnostic ignored "-Wmissing-braces"
   #ifndef __cplusplus
     #pragma clang diagnostic ignored "-Wincompatible-pointer-types"
+    #pragma clang diagnostic ignored "-Wmain-return-type"
     #pragma clang diagnostic error   "-Wimplicit-function-declaration"
     #pragma clang diagnostic error   "-Wimplicit-int"
   #else

@@ -33,5 +33,6 @@ return {
   },
   scripts = {
     dev = "nlpm run nelua main.nelua -- main.mani -r",
+    dev_dbg = "nlpm run nelua main.nelua -d -- main.mani -r",
   },
 }

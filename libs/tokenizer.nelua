@@ -11,6 +11,7 @@ local Pos = require ".pos"
 
 local TokenKind = @enum{
   _UNDEFINED = 0,
+  BANG,
   CLOSE_ANGLE,
   CLOSE_BRACKET,
   CLOSE_CURLY,
@@ -24,20 +25,25 @@ local TokenKind = @enum{
   DOT,
   EOF,
   EQUALS,
+  EQUATES,
+  GT_EQUALS,
   IDENTIFIER,
   KEYWORD_BREAK,
-  KEYWORD_FOR,
   KEYWORD_FN,
-  KEYWORD_STRUCT,
+  KEYWORD_FOR,
   KEYWORD_RETURN,
+  KEYWORD_STRUCT,
   KEYWORD_WHILE,
+  LT_EQUALS,
   MINUS,
+  NOT_EQUALS,
   NUMBER,
   OPEN_ANGLE,
   OPEN_BRACKET,
   OPEN_CURLY,
   OPEN_PAREN,
   PLUS,
+  SLASH,
   STAR,
   STRING,
   _COUNT
@@ -57,10 +63,12 @@ local tokenizer = @record{}
 local tokenizer.TokenKind = TokenKind
 local tokenizer.Token = Token
 
-assert(TokenKind._COUNT == 30)
+assert(TokenKind._COUNT == 36)
 function tokenizer.TokenKind_tostring(kind: TokenKind): string
   range_check!(kind, TokenKind)
   switch kind do
+    case TokenKind.BANG then
+      return "!"
     case TokenKind.CLOSE_ANGLE then
       return ">"
     case TokenKind.CLOSE_BRACKET then
@@ -87,6 +95,10 @@ function tokenizer.TokenKind_tostring(kind: TokenKind): string
       return "EOF"
     case TokenKind.EQUALS then
       return "="
+    case TokenKind.EQUATES then
+      return "=="
+    case TokenKind.GT_EQUALS then
+      return ">="
     case TokenKind.IDENTIFIER then
       return "IDENTIFIER"
     case TokenKind.KEYWORD_BREAK then
@@ -101,8 +113,14 @@ function tokenizer.TokenKind_tostring(kind: TokenKind): string
       return "return"
     case TokenKind.KEYWORD_WHILE then
       return "while"
+    case TokenKind.LT_EQUALS then
+      return "<="
+    case TokenKind.SLASH then
+      return "/"
     case TokenKind.MINUS then
       return "-"
+    case TokenKind.NOT_EQUALS then
+      return "!="
     case TokenKind.NUMBER then
       return "NUMBER"
     case TokenKind.OPEN_ANGLE then
@@ -135,7 +153,7 @@ end
 
 local TokenizeResult = @Result(sequence(Token), ErrLoc)
 
-assert(TokenKind._COUNT == 30)
+assert(TokenKind._COUNT == 36)
 function tokenizer.tokenize(path: string, content: string): TokenizeResult
   local tokens: sequence(Token)
   local index = 1
@@ -147,26 +165,38 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
 
     if current_char:match("%s") then
       -- Skip white space
-    elseif current_char == "/" and next_char == "/" then
-      local start = index
-      local s_pos = Pos.index_to_pos(start, content)
-      local sb: stringbuilder
-      sb:write(current_char)
-      while next_char ~= "\n" do
-        index = index + 1
-        sb:write(next_char)
-        next_char = content:sub(index + 1, index + 1)
+    elseif current_char == "/" then
+      if next_char == "/" then
+        local start = index
+        local s_pos = Pos.index_to_pos(start, content)
+        local sb: stringbuilder
+        sb:write(current_char)
+        while next_char ~= "\n" do
+          index = index + 1
+          sb:write(next_char)
+          next_char = content:sub(index + 1, index + 1)
+        end
+        local e_pos = Pos.index_to_pos(index, content)
+        local val = sb:promote()
+        tokens:push({
+          kind = TokenKind.COMMENT,
+          val = val,
+          s_pos = s_pos,
+          e_pos = e_pos,
+          s_index = start,
+          e_index = index,
+        })
+      else
+        local pos = Pos.index_to_pos(index, content)
+        tokens:push({
+          kind = TokenKind.SLASH,
+          val = current_char,
+          s_pos = pos,
+          e_pos = pos,
+          s_index = index,
+          e_index = index,
+        })
       end
-      local e_pos = Pos.index_to_pos(index, content)
-      local val = sb:promote()
-      tokens:push({
-        kind = TokenKind.COMMENT,
-        val = val,
-        s_pos = s_pos,
-        e_pos = e_pos,
-        s_index = start,
-        e_index = index,
-      })
     elseif current_char == '"' then
       local start = index
       local sb: stringbuilder
@@ -188,6 +218,30 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         s_index = start,
         e_index = index,
       })
+    elseif current_char == "!" then
+      if next_char == "=" then
+        local s_pos = Pos.index_to_pos(index, content)
+        local e_pos = Pos.index_to_pos(index + 1, content)
+        tokens:push({
+          kind = TokenKind.LT_EQUALS,
+          val = "!=",
+          s_pos = s_pos,
+          e_pos = e_pos,
+          s_index = index,
+          e_index = index + 1,
+        })
+        index = index + 1
+      else
+        local pos = Pos.index_to_pos(index, content)
+        tokens:push({
+          kind = TokenKind.BANG,
+          val = current_char,
+          s_pos = pos,
+          e_pos = pos,
+          s_index = index,
+          e_index = index,
+        })
+      end
     elseif current_char == "*" then
       local pos = Pos.index_to_pos(index, content)
       tokens:push({
@@ -229,25 +283,53 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         e_index = index,
       })
     elseif current_char == "<" then
-      local pos = Pos.index_to_pos(index, content)
-      tokens:push({
-        kind = TokenKind.OPEN_ANGLE,
-        val = current_char,
-        s_pos = pos,
-        e_pos = pos,
-        s_index = index,
-        e_index = index,
-      })
+      if next_char == "=" then
+        local s_pos = Pos.index_to_pos(index, content)
+        local e_pos = Pos.index_to_pos(index + 1, content)
+        tokens:push({
+          kind = TokenKind.LT_EQUALS,
+          val = "<=",
+          s_pos = s_pos,
+          e_pos = e_pos,
+          s_index = index,
+          e_index = index + 1,
+        })
+        index = index + 1
+      else
+        local pos = Pos.index_to_pos(index, content)
+        tokens:push({
+          kind = TokenKind.OPEN_ANGLE,
+          val = current_char,
+          s_pos = pos,
+          e_pos = pos,
+          s_index = index,
+          e_index = index,
+        })
+      end
     elseif current_char == ">" then
-      local pos = Pos.index_to_pos(index, content)
-      tokens:push({
-        kind = TokenKind.CLOSE_ANGLE,
-        val = current_char,
-        s_pos = pos,
-        e_pos = pos,
-        s_index = index,
-        e_index = index,
-      })
+      if next_char == "=" then
+        local s_pos = Pos.index_to_pos(index, content)
+        local e_pos = Pos.index_to_pos(index + 1, content)
+        tokens:push({
+          kind = TokenKind.LT_EQUALS,
+          val = ">=",
+          s_pos = s_pos,
+          e_pos = e_pos,
+          s_index = index,
+          e_index = index + 1,
+        })
+        index = index + 1
+      else
+        local pos = Pos.index_to_pos(index, content)
+        tokens:push({
+          kind = TokenKind.CLOSE_ANGLE,
+          val = current_char,
+          s_pos = pos,
+          e_pos = pos,
+          s_index = index,
+          e_index = index,
+        })
+      end
     elseif current_char == "{" then
       local pos = Pos.index_to_pos(index, content)
       tokens:push({
@@ -358,16 +440,35 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         e_index = index,
       })
     elseif current_char == "=" then
-      local pos = Pos.index_to_pos(index, content)
-      tokens:push({
-        kind = TokenKind.EQUALS,
-        val = current_char,
-        s_pos = pos,
-        e_pos = pos,
-        s_index = index,
-        e_index = index,
-      })
+      if next_char == "=" then
+        local s_pos = Pos.index_to_pos(index, content)
+        local e_pos = Pos.index_to_pos(index + 1, content)
+        tokens:push({
+          kind = TokenKind.EQUALS,
+          val = "==",
+          s_pos = s_pos,
+          e_pos = e_pos,
+          s_index = index,
+          e_index = index + 1,
+        })
+        index = index + 1
+      else
+        local pos = Pos.index_to_pos(index, content)
+        tokens:push({
+          kind = TokenKind.EQUALS,
+          val = current_char,
+          s_pos = pos,
+          e_pos = pos,
+          s_index = index,
+          e_index = index,
+        })
+      end
     elseif current_char:match("[%d]") then
+      --[[
+        TODO: Rework this and remove all the booleans
+        Use simple if statements and break it up disregarding code repetition
+        E.g: if next_char == "." then continue matching against only decimals then return early
+      ]]
       local start = index
       local val = current_char
       local decimal = false
