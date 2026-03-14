@@ -227,193 +227,109 @@ function Parser:advance_comma_until(token_kind: TokenKind): ExpectResult
   return ExpectResult.ok(token)
 end
 
-local PrimitiveType = @record{
-  name: string,
-  size: uinteger,
-  is_scalar: boolean,
-  is_integer: boolean,
-  is_float: boolean,
-  is_signed: boolean
+local NodeKind = @enum{
+  _UNDEFINED = 0,
+  COMMENT,
+  SCOPE,
+  FN_DEF,
+  FN_CALL,
+  STRING,
+  INTEGER,
+  BOOLEAN,
+  UNARY,
+  BINARY,
+  PAREN,
+  RETURN,
+  _COUNT
 }
 
-local primitive_types: hashmap(string, PrimitiveType)
+local Node = @record{
+  kind: NodeKind,
 
-local void_type: PrimitiveType = {
-  name = "void",
-  size = #void
-}
-primitive_types[void_type.name] = void_type
-
-local int64_type: PrimitiveType = {
-  name = "int64",
-  size = #int64,
-  is_scalar = true,
-  is_integer = true,
-  is_signed = true
-}
-primitive_types[int64_type.name] = int64_type
-
-local Type = @Sum(record{
-  primitive: PrimitiveType
-})
-
-local ScopeNode <forwarddecl> = @record{}
-
-local BaseNode = @record{
   s_pos: Pos,
   e_pos: Pos,
   s_index: uinteger,
   e_index: uinteger,
-  scope: *ScopeNode
+  scope: *Node,
+
+  scope_path: string,
+  scope_content: string,
+  scope_children: sequence(*Node),
+
+  comment_content: string,
+
+  fn_def_name: string,
+  fn_def_return_type: string,
+  fn_def_body: *Node,
+
+  fn_call_name: string,
+  fn_call_args: sequence(*Node),
+
+  str_content: string,
+  str_len: uinteger,
+
+  bool_val: string,
+
+  int_val: string,
+
+  unary_operator: Token,
+  unary_right: *Node,
+
+  binary_left: *Node,
+  binary_operator: Token,
+  binary_right: *Node,
+
+  paren_val: *Node,
+
+  return_val: *Node,
 }
 
-local NodeKind = @enum{
-  _UNDEFINED = 0,
-  ARRAY,
-  ASSIGNMENT,
-  AST,
-  BIN_OP,
-  BREAK,
-  COMMENT,
-  FIELD,
-  FOR_LOOP,
-  ID,
-  ID_DECL,
-  INDEX,
-  INIT_FIELD,
-  INIT_LIST,
-  LITERAL,
-  FN_CALL,
-  FN_DEF,
-  RETURN,
-  TYPE,
-  WHILE_LOOP,
-  _COUNT
-}
-
-##[[
-function copy_base_node_fields(node)
-  assert(node)
-  for _, v in ipairs(BaseNode.value.fields) do
-    node.value:add_field(v.name, v.type)
+function Node:is_expr(): boolean
+  switch self.kind do
+    case
+      NodeKind.FN_CALL,
+      NodeKind.STRING,
+      NodeKind.INTEGER,
+      NodeKind.BOOLEAN,
+      NodeKind.UNARY,
+      NodeKind.BINARY
+    then
+    return true
   end
-end
-]]
-
-local CommentNode = @record{
-  content: string,
-}
-## copy_base_node_fields(CommentNode)
-
-local FnDefNode = @record{
-  name: string,
-  return_type: Type,
-  body: *ScopeNode
-}
-## copy_base_node_fields(FnDefNode)
-
-local FnCallNode <forwarddecl> = @record{}
-
-local StrLitNode = @record{
-  content: string,
-  len: uinteger
-}
-## copy_base_node_fields(StrLitNode)
-
-
-local UnaryNode <forwarddecl> = @record{}
-local BinaryNode <forwarddecl> = @record{}
-
-local BoolLitNode = @record{
-  val: string
-}
-## copy_base_node_fields(BoolLitNode)
-
-local NumberLitNode = @record{
-  val: string
-}
-## copy_base_node_fields(NumberLitNode)
-
-local ParenNode <forwarddecl> = @record{}
-
-local ExprNode = @Sum(record{
-  fn_call: *FnCallNode,
-  str_lit: StrLitNode,
-  bool_lit: BoolLitNode,
-  number_lit: NumberLitNode,
-  unary: *UnaryNode,
-  binary: *BinaryNode,
-  paren: *ParenNode,
-})
-
-ParenNode = @record{
-  val: ExprNode
-}
-## copy_base_node_fields(ParenNode)
-
-
-UnaryNode = @record{
-  operator: Token,
-  right: ExprNode
-}
-## copy_base_node_fields(UnaryNode)
-
-BinaryNode = @record{
-  left: ExprNode,
-  operator: Token,
-  right: ExprNode
-}
-## copy_base_node_fields(BinaryNode)
-
-FnCallNode = @record{
-  name: string,
-  args: sequence(ExprNode)
-}
-## copy_base_node_fields(FnCallNode)
-
-local ReturnStmtNode = @record{
-  val: ExprNode
-}
-## copy_base_node_fields(ReturnStmtNode)
-
-local StmtNode = @Sum(record{
-  comment: *CommentNode,
-  fn_def: *FnDefNode,
-  fn_call: *FnCallNode,
-  return_stmt: *ReturnStmtNode
-})
-
-ScopeNode = @record{
-  path: string,
-  content: string,
-  children: sequence(StmtNode)
-}
-## copy_base_node_fields(ScopeNode)
-
-local ParseScopeResult = @Result(*ScopeNode, ErrLoc)
-local Parser.parse_scope: function(self: *Parser, scope: *ScopeNode, till: TokenKind): ParseScopeResult
-
-local ParseTypeResult = @Result(Type, ErrLoc)
-function Parser:parse_type(scope: *ScopeNode, type_name: string): ParseTypeResult
-  assert(scope)
-
-  if primitive_types:has(type_name) then
-    return ParseTypeResult.ok(Type.primitive(primitive_types[type_name]))
-  end
-  error("TODO: Parser:parse_type")
-  return
+  return false
 end
 
-function Parser:parse_curly_scope(scope: *ScopeNode): ParseScopeResult
-  assert(scope)
+function Node:is(kind: NodeKind): boolean
+  return self.kind == kind
+end
 
-  local result: *ScopeNode = new(ScopeNode)
-  result.path = scope.path
+function Node:is_stmt(): boolean
+  switch self.kind do
+    case
+      NodeKind.FN_DEF,
+      NodeKind.FN_CALL,
+      NodeKind.RETURN
+    then
+    return true
+  end
+  return false
+end
+
+local ParseNodeResult = @Result(*Node, ErrLoc)
+
+local Parser.parse_scope: function(self: *Parser, scope: *Node, till: TokenKind): ParseNodeResult
+
+function Parser:parse_curly_scope(scope: *Node): ParseNodeResult
+  assert(scope and scope.kind == NodeKind.SCOPE)
+
+  local result: *Node = new(Node)
+  result.kind = NodeKind.SCOPE
+  result.scope_path = scope.scope_path
   result.scope = scope
 
   local expect_result = self:expect(TokenKind.OPEN_CURLY)
   if expect_result:is_err() then
-    return ParseScopeResult.err(expect_result:get_err())
+    return ParseNodeResult.err(expect_result:get_err())
   end
   local s_token = expect_result:get_ok()
   result.s_pos = s_token.s_pos
@@ -421,32 +337,32 @@ function Parser:parse_curly_scope(scope: *ScopeNode): ParseScopeResult
 
   local parse_result = self:parse_scope(result, TokenKind.CLOSE_CURLY)
   if parse_result:is_err() then
-    return ParseScopeResult.err(parse_result:get_err())
+    return ParseNodeResult.err(parse_result:get_err())
   end
 
   expect_result = self:expect(TokenKind.CLOSE_CURLY)
   if expect_result:is_err() then
-    return ParseScopeResult.err(expect_result:get_err())
+    return ParseNodeResult.err(expect_result:get_err())
   end
   local e_token = expect_result:get_ok()
   result.e_pos = e_token.e_pos
   result.e_index = e_token.e_index
 
-  result.content = self.content:sub(result.s_index, result.e_index + 1)
+  result.scope_content = self.content:sub(result.s_index, result.e_index + 1)
 
-  return ParseScopeResult.ok(result)
+  return ParseNodeResult.ok(result)
 end
 
-local ParseFnDefResult = @Result(*FnDefNode, ErrLoc)
-function Parser:parse_fn_def(scope: *ScopeNode): ParseFnDefResult
-  assert(scope)
+function Parser:parse_fn_def(scope: *Node): ParseNodeResult
+  assert(scope and scope.kind == NodeKind.SCOPE)
 
-  local result: *FnDefNode = new(FnDefNode)
+  local result: *Node = new(Node)
+  result.kind = NodeKind.FN_DEF
   result.scope = scope
 
   local expect_result = self:expect(TokenKind.KEYWORD_FN)
   if expect_result:is_err() then
-    return ParseFnDefResult.err(expect_result:get_err())
+    return ParseNodeResult.err(expect_result:get_err())
   end
   local s_token = expect_result:get_ok()
   result.s_pos = s_token.s_pos
@@ -454,13 +370,13 @@ function Parser:parse_fn_def(scope: *ScopeNode): ParseFnDefResult
 
   expect_result = self:expect(TokenKind.IDENTIFIER)
   if expect_result:is_err() then
-    return ParseFnDefResult.err(expect_result:get_err())
+    return ParseNodeResult.err(expect_result:get_err())
   end
-  result.name = expect_result:get_ok().val
+  result.fn_def_name = expect_result:get_ok().val
 
   expect_result = self:expect(TokenKind.OPEN_PAREN)
   if expect_result:is_err() then
-    return ParseFnDefResult.err(expect_result:get_err())
+    return ParseNodeResult.err(expect_result:get_err())
   end
 
   --TODO: Function Parameters
@@ -470,84 +386,80 @@ function Parser:parse_fn_def(scope: *ScopeNode): ParseFnDefResult
 
   expect_result = self:expect(TokenKind.CLOSE_PAREN)
   if expect_result:is_err() then
-    return ParseFnDefResult.err(expect_result:get_err())
+    return ParseNodeResult.err(expect_result:get_err())
   end
 
   expect_result = self:expect(TokenKind.COLON)
   if expect_result:is_err() then
-    return ParseFnDefResult.err(expect_result:get_err())
+    return ParseNodeResult.err(expect_result:get_err())
   end
 
   expect_result = self:expect(TokenKind.IDENTIFIER)
   if expect_result:is_err() then
-    return ParseFnDefResult.err(expect_result:get_err())
+    return ParseNodeResult.err(expect_result:get_err())
   end
-  local type_result = self:parse_type(scope, expect_result:get_ok().val)
-  if type_result:is_err() then
-    return ParseFnDefResult.err(type_result:get_err())
-  end
-  result.return_type = type_result:get_ok()
+  result.fn_def_return_type = expect_result:get_ok().val
 
   local parse_result = self:parse_curly_scope(scope)
   if parse_result:is_err() then
-    return ParseFnDefResult.err(parse_result:get_err())
+    return ParseNodeResult.err(parse_result:get_err())
   end
 
   -- TODO: Parse returns
 
-  result.body = parse_result:get_ok()
+  result.fn_def_body = parse_result:get_ok()
 
-  return ParseFnDefResult.ok(result)
+  return ParseNodeResult.ok(result)
 end
 
-local ParseFnCallResult = @Result(*FnCallNode, ErrLoc)
-function Parser:parse_fn_call(scope: *ScopeNode): ParseFnCallResult
-  local result = new(FnCallNode)
+function Parser:parse_fn_call(scope: *Node): ParseNodeResult
+  local result = new(Node)
+  result.kind = NodeKind.FN_CALL
 
   local s_token = self:peek()
   if s_token.val == "println" then
-    result.name = self:advance().val
+    result.fn_call_name = self:advance().val
 
     local expect_result = self:expect(TokenKind.OPEN_PAREN)
     if expect_result:is_err() then
-      return ParseFnCallResult.err(expect_result:get_err())
+      return ParseNodeResult.err(expect_result:get_err())
     end
 
     expect_result = self:expect(TokenKind.STRING)
     if expect_result:is_err() then
-      return ParseFnCallResult.err(expect_result:get_err())
+      return ParseNodeResult.err(expect_result:get_err())
     end
     local str = expect_result:get_ok().val
 
     local expect_result = self:expect(TokenKind.CLOSE_PAREN)
     if expect_result:is_err() then
-      return ParseFnCallResult.err(expect_result:get_err())
+      return ParseNodeResult.err(expect_result:get_err())
     end
 
-    result.args:push(ExprNode.str_lit({ content = str, len = #str }))
+    local str_node = new(Node)
+    $str_node = { kind = NodeKind.STRING, str_content = str, str_len = #str }
+    result.fn_call_args:push(str_node)
   else
     error("TODO: Parser:parse_fn_call")
   end
-  return ParseFnCallResult.ok(result)
+  return ParseNodeResult.ok(result)
 end
 
-local ParseExprResult = @Result(ExprNode, ErrLoc)
+local Parser.parse_expr: function(self: *Parser, scope: *Node): ParseNodeResult
 
-local Parser.parse_expr: function(self: *Parser, scope: *ScopeNode): ParseExprResult
-
-function Parser:parse_primary(scope: *ScopeNode): ParseExprResult
-  assert(scope)
+function Parser:parse_primary(scope: *Node): ParseNodeResult
+  assert(scope and scope.kind == NodeKind.SCOPE)
 
   local expect_result = self:expect_one_of({
     TokenKind.CONSTANT_TRUE,
     TokenKind.CONSTANT_FALSE,
     TokenKind.CONSTANT_NIL,
-    TokenKind.NUMBER,
+    TokenKind.INTEGER,
     TokenKind.STRING,
     TokenKind.OPEN_PAREN,
   })
   if expect_result:is_err() then
-    return ParseExprResult.err(expect_result:get_err())
+    return ParseNodeResult.err(expect_result:get_err())
   end
   local token = expect_result:get_ok()
 
@@ -556,7 +468,10 @@ function Parser:parse_primary(scope: *ScopeNode): ParseExprResult
     token.kind == TokenKind.CONSTANT_FALSE or
     token.kind == TokenKind.CONSTANT_NIL
   then
-    return ParseExprResult.ok(ExprNode.bool_lit({
+    local bool_node = new(Node)
+    $bool_node = {
+      kind = NodeKind.BOOLEAN,
+
       s_pos = token.s_pos,
       e_pos = token.e_pos,
 
@@ -564,10 +479,14 @@ function Parser:parse_primary(scope: *ScopeNode): ParseExprResult
       e_index = token.e_index,
       scope = scope,
 
-      val = token.val
-    }))
-  elseif token.kind == TokenKind.NUMBER then
-    return ParseExprResult.ok(ExprNode.number_lit({
+      bool_val = token.val
+    }
+    return ParseNodeResult.ok(bool_node)
+  elseif token.kind == TokenKind.INTEGER then
+    local int_node = new(Node)
+    $int_node = {
+      kind = NodeKind.INTEGER,
+
       s_pos = token.s_pos,
       e_pos = token.e_pos,
 
@@ -575,10 +494,14 @@ function Parser:parse_primary(scope: *ScopeNode): ParseExprResult
       e_index = token.e_index,
       scope = scope,
 
-      val = token.val
-    }))
+      int_val = token.val
+    }
+    return ParseNodeResult.ok(int_node)
   elseif token.kind == TokenKind.STRING then
-    return ParseExprResult.ok(ExprNode.str_lit({
+    local str_node = new(Node)
+    $str_node = {
+      kind = NodeKind.STRING,
+
       s_pos = token.s_pos,
       e_pos = token.e_pos,
 
@@ -586,9 +509,10 @@ function Parser:parse_primary(scope: *ScopeNode): ParseExprResult
       e_index = token.e_index,
       scope = scope,
 
-      content = token.val,
-      len = #token.val
-    }))
+      str_content = token.val,
+      str_len = #token.val
+    }
+    return ParseNodeResult.ok(str_node)
   elseif token.kind == TokenKind.OPEN_PAREN then
     local expr_result = self:parse_expr(scope)
     if expr_result:is_err() then
@@ -598,12 +522,14 @@ function Parser:parse_primary(scope: *ScopeNode): ParseExprResult
 
     local expect_result = self:expect(TokenKind.CLOSE_PAREN)
     if expect_result:is_err() then
-      return ParseExprResult.err(expect_result:get_err())
+      return ParseNodeResult.err(expect_result:get_err())
     end
     local e_token = self:peek_prev()
 
-    local paren = new(ParenNode)
+    local paren = new(Node)
     $paren = {
+      kind = NodeKind.PAREN,
+
       s_pos = token.s_pos,
       e_pos = e_token.e_pos,
 
@@ -611,17 +537,17 @@ function Parser:parse_primary(scope: *ScopeNode): ParseExprResult
       e_index = e_token.e_index,
       scope = scope,
 
-      val = expr
+      paren_val = expr
     }
-    return ParseExprResult.ok(ExprNode.paren(paren))
+    return ParseNodeResult.ok(paren)
   end
 
   error("UNREACHABLE")
   return
 end
 
-function Parser:parse_unary(scope: *ScopeNode): ParseExprResult
-  assert(scope)
+function Parser:parse_unary(scope: *Node): ParseNodeResult
+  assert(scope and scope.kind == NodeKind.SCOPE)
 
   if self:peek_one_of({ TokenKind.BANG, TokenKind.MINUS, TokenKind.PLUS }):is_ok() then
     local operator = self:advance()
@@ -634,8 +560,10 @@ function Parser:parse_unary(scope: *ScopeNode): ParseExprResult
 
     local e_token = self:peek_prev()
 
-    local unary = new(UnaryNode)
+    local unary = new(Node)
     $unary = {
+      kind = NodeKind.UNARY,
+
       s_pos = operator.s_pos,
       e_pos = e_token.e_pos,
 
@@ -643,17 +571,17 @@ function Parser:parse_unary(scope: *ScopeNode): ParseExprResult
       e_index = e_token.e_index,
       scope = scope,
 
-      operator = operator,
-      right = right
+      unary_operator = operator,
+      unary_right = right
     }
-    return ParseExprResult.ok(ExprNode.unary(unary))
+    return ParseNodeResult.ok(unary)
   end
 
   return self:parse_primary(scope)
 end
 
-function Parser:parse_factor(scope: *ScopeNode): ParseExprResult
-  assert(scope)
+function Parser:parse_factor(scope: *Node): ParseNodeResult
+  assert(scope and scope.kind == NodeKind.SCOPE)
 
   local s_token = self:peek()
 
@@ -674,8 +602,10 @@ function Parser:parse_factor(scope: *ScopeNode): ParseExprResult
 
     local e_token = self:peek_prev()
 
-    local binary = new(BinaryNode)
+    local binary = new(Node)
     $binary = {
+      kind = NodeKind.BINARY,
+
       s_pos = s_token.s_pos,
       e_pos = e_token.e_pos,
 
@@ -683,18 +613,18 @@ function Parser:parse_factor(scope: *ScopeNode): ParseExprResult
       e_index = e_token.e_index,
       scope = scope,
 
-      left = left,
-      operator = operator,
-      right = right
+      binary_left = left,
+      binary_operator = operator,
+      binary_right = right
     }
-    expr_result = ParseExprResult.ok(ExprNode.binary(binary))
+    expr_result = ParseNodeResult.ok(binary)
   end
 
   return expr_result
 end
 
-function Parser:parse_term(scope: *ScopeNode): ParseExprResult
-  assert(scope)
+function Parser:parse_term(scope: *Node): ParseNodeResult
+  assert(scope and scope.kind == NodeKind.SCOPE)
 
   local s_token = self:peek()
 
@@ -715,8 +645,10 @@ function Parser:parse_term(scope: *ScopeNode): ParseExprResult
 
     local e_token = self:peek_prev()
 
-    local binary = new(BinaryNode)
+    local binary = new(Node)
     $binary = {
+      kind = NodeKind.BINARY,
+
       s_pos = s_token.s_pos,
       e_pos = e_token.e_pos,
 
@@ -724,18 +656,18 @@ function Parser:parse_term(scope: *ScopeNode): ParseExprResult
       e_index = e_token.e_index,
       scope = scope,
 
-      left = left,
-      operator = operator,
-      right = right
+      binary_left = left,
+      binary_operator = operator,
+      binary_right = right
     }
-    expr_result = ParseExprResult.ok(ExprNode.binary(binary))
+    expr_result = ParseNodeResult.ok(binary)
   end
 
   return expr_result
 end
 
-function Parser:parse_comparison(scope: *ScopeNode): ParseExprResult
-  assert(scope)
+function Parser:parse_comparison(scope: *Node): ParseNodeResult
+  assert(scope and scope.kind == NodeKind.SCOPE)
 
   local s_token = self:peek()
 
@@ -756,8 +688,10 @@ function Parser:parse_comparison(scope: *ScopeNode): ParseExprResult
 
     local e_token = self:peek_prev()
 
-    local binary = new(BinaryNode)
+    local binary = new(Node)
     $binary = {
+      kind = NodeKind.BINARY,
+
       s_pos = s_token.s_pos,
       e_pos = e_token.e_pos,
 
@@ -765,18 +699,18 @@ function Parser:parse_comparison(scope: *ScopeNode): ParseExprResult
       e_index = e_token.e_index,
       scope = scope,
 
-      left = left,
-      operator = operator,
-      right = right
+      binary_left = left,
+      binary_operator = operator,
+      binary_right = right
     }
-    expr_result = ParseExprResult.ok(ExprNode.binary(binary))
+    expr_result = ParseNodeResult.ok(binary)
   end
 
   return expr_result
 end
 
-function Parser:parse_equality(scope: *ScopeNode): ParseExprResult
-  assert(scope)
+function Parser:parse_equality(scope: *Node): ParseNodeResult
+  assert(scope and scope.kind == NodeKind.SCOPE)
 
   local s_token = self:peek()
 
@@ -797,8 +731,10 @@ function Parser:parse_equality(scope: *ScopeNode): ParseExprResult
 
     local e_token = self:peek_prev()
 
-    local binary = new(BinaryNode)
+    local binary = new(Node)
     $binary = {
+      kind = NodeKind.BINARY,
+
       s_pos = s_token.s_pos,
       e_pos = e_token.e_pos,
 
@@ -806,52 +742,58 @@ function Parser:parse_equality(scope: *ScopeNode): ParseExprResult
       e_index = e_token.e_index,
       scope = scope,
 
-      left = left,
-      operator = operator,
-      right = right
+      binary_left = left,
+      binary_operator = operator,
+      binary_right = right
     }
-    expr_result = ParseExprResult.ok(ExprNode.binary(binary))
+    expr_result = ParseNodeResult.ok(binary)
   end
 
   return expr_result
 end
 
-Parser.parse_expr = function(self: *Parser, scope: *ScopeNode): ParseExprResult
-  assert(scope)
+Parser.parse_expr = function(self: *Parser, scope: *Node): ParseNodeResult
+  assert(scope and scope.kind == NodeKind.SCOPE)
 
   return self:parse_equality(scope)
 end
 
-Parser.parse_scope = function(self: *Parser, scope: *ScopeNode, till: TokenKind): ParseScopeResult
-  assert(scope)
+Parser.parse_scope = function(self: *Parser, scope: *Node, till: TokenKind): ParseNodeResult
+  assert(scope and scope.kind == NodeKind.SCOPE)
   assert(till > TokenKind._UNDEFINED)
   assert(till < TokenKind._COUNT)
 
   local token = self:peek()
   if token.kind == till then
-    return ParseScopeResult.ok(scope)
+    return ParseNodeResult.ok(scope)
   end
 
-  local stmt_node: StmtNode
+  local stmt_node: *Node
   if token.kind == TokenKind.COMMENT then
     self:advance()
-    local comment_node: *CommentNode = new(CommentNode)
+    local comment_node: *Node = new(Node)
     $comment_node = {
+      kind = NodeKind.COMMENT,
+
       s_pos = token.s_pos,
       e_pos = token.e_pos,
+
       s_index = token.s_index,
       e_index = token.e_index,
-      content = token.val,
+
       scope = scope,
+
+      comment_content = token.val,
+
     }
-    stmt_node = StmtNode.comment(comment_node)
+    stmt_node = comment_node
   elseif token.kind == TokenKind.IDENTIFIER then
     if self:peek_next().kind == TokenKind.OPEN_PAREN then
       local parse_fn_call_result = self:parse_fn_call(scope)
       if parse_fn_call_result:is_err() then
-        return ParseScopeResult.err(parse_fn_call_result:get_err())
+        return ParseNodeResult.err(parse_fn_call_result:get_err())
       end
-    stmt_node = StmtNode.fn_call(parse_fn_call_result:get_ok())
+    stmt_node = parse_fn_call_result:get_ok()
     -- elseif self:peek_next().kind == TokenKind.COLON then
     --   stmt_node = self:parse_id_decl(scope)
     -- elseif self:peek_next().kind == TokenKind.EQUALS then
@@ -882,65 +824,70 @@ Parser.parse_scope = function(self: *Parser, scope: *ScopeNode, till: TokenKind)
     -- stmt_node = ParseResult.ok(node)
   elseif token.kind == TokenKind.KEYWORD_RETURN then
     self:advance()
-    local return_stmt = new(ReturnStmtNode)
+    local return_stmt = new(Node)
 
     local expr_result = self:parse_expr(scope)
     if expr_result:is_err() then
-      return ParseScopeResult.err(expr_result:get_err())
+      return ParseNodeResult.err(expr_result:get_err())
     end
 
     $return_stmt = {
+      kind = NodeKind.RETURN,
+
       s_pos = token.s_pos,
       e_pos = token.e_pos,
+
       s_index = token.s_index,
       e_index = token.e_index,
       scope = scope,
 
-      val = expr_result:get_ok()
+      return_val = expr_result:get_ok()
     }
-    stmt_node = StmtNode.return_stmt(return_stmt)
+    stmt_node = return_stmt
   elseif token.kind == TokenKind.KEYWORD_FN then
     local result = self:parse_fn_def(scope)
     if result:is_err() then
-      return ParseScopeResult.err(result:get_err())
+      return ParseNodeResult.err(result:get_err())
     end
-    stmt_node = StmtNode.fn_def(result:get_ok())
+    stmt_node = result:get_ok()
   elseif token.kind == TokenKind.KEYWORD_STRUCT then
     -- self:parse_rec_def(scope)
   else
     error(("Unexpected Token: '%s'"):format(TokenKind_tostring(token.kind)))
   end
 
-  scope.children:push(stmt_node)
+  scope.scope_children:push(stmt_node)
 
   return self:parse_scope(scope, till)
 end
 
-function Parser:parse(): ParseScopeResult
-  local ast = new(ScopeNode)
+function Parser:parse(): ParseNodeResult
+  local ast = new(Node)
   local s_pos = Pos.index_to_pos(1, self.content)
   local e_pos = Pos.index_to_pos(#self.content, self.content)
   $ast = {
-    path = self.path,
+    kind = NodeKind.SCOPE,
 
     s_pos = s_pos,
     e_pos = e_pos,
     s_index = 1,
     e_index = #self.content,
-    scope = nilptr,
+    scope = ast,
 
-    content = self.content,
+    scope_path = self.path,
+    scope_content = self.content,
+    scope_children = {}
   }
   local result = self:parse_scope(ast, TokenKind.EOF)
   if result:is_err() then
-    return ParseScopeResult.err(result:get_err())
+    return ParseNodeResult.err(result:get_err())
   end
   local ast = result:get_ok()
 
   local main_found = false
 
-  for _, child in ipairs(ast.children) do
-    if child:is_fn_def() and child:get_fn_def().name == "main" then
+  for _, child in ipairs(ast.scope_children) do
+    if child:is(NodeKind.FN_DEF) and child.fn_def_name == "main" then
       main_found = true
       break
     end
@@ -954,16 +901,7 @@ function Parser:parse(): ParseScopeResult
   return result
 end
 
-local Parser.ScopeNode = ScopeNode
-local Parser.BaseNode = BaseNode
-local Parser.CommentNode = CommentNode
-local Parser.FnDefNode = FnDefNode
-local Parser.FnCallNode = FnCallNode
-local Parser.StrLitNode = StrLitNode
-local Parser.ExprNode = ExprNode
-local Parser.StmtNode = StmtNode
-
-local Parser.primitive_types = primitive_types
-local Parser.Type = Type
+local Parser.NodeKind = NodeKind
+local Parser.Node = Node
 
 return Parser

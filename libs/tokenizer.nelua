@@ -37,7 +37,7 @@ local TokenKind = @enum{
   LT_EQUALS,
   MINUS,
   NOT_EQUALS,
-  NUMBER,
+  INTEGER,
   OPEN_ANGLE,
   OPEN_BRACKET,
   OPEN_CURLY,
@@ -121,8 +121,8 @@ function tokenizer.TokenKind_tostring(kind: TokenKind): string
       return "-"
     case TokenKind.NOT_EQUALS then
       return "!="
-    case TokenKind.NUMBER then
-      return "NUMBER"
+    case TokenKind.INTEGER then
+      return "INTEGER"
     case TokenKind.OPEN_ANGLE then
       return "<"
     case TokenKind.OPEN_BRACKET then
@@ -464,74 +464,23 @@ function tokenizer.tokenize(path: string, content: string): TokenizeResult
         })
       end
     elseif current_char:match("[%d]") then
-      --[[
-        TODO: Rework this and remove all the booleans
-        Use simple if statements and break it up disregarding code repetition
-        E.g: if next_char == "." then continue matching against only decimals then return early
-      ]]
       local start = index
       local val = current_char
-      local decimal = false
-      local exponent = false
-      local after_exp = false
-      local err = false
-      while next_char:match("[%d%.eE%-%+]") do
-        if next_char == "." then
-          if decimal then
-            err = true
-            break
-          end
-          decimal = true
-        elseif next_char:match("[eE]") then
-          if exponent then
-            err = true
-            break
-          end
-          exponent = true
-          after_exp = true
-        elseif not exponent and next_char:match("[%+%-]") then
-          goto end_label
-        elseif after_exp and next_char:match("[^%-%+%d]") then
-          err = true
-          break
-        end
+      while next_char:match("[%d]") do
         val = val .. next_char
         index = index + 1
         next_char = content:sub(index + 1, index + 1)
       end
-      if (current_char == "-" or current_char == "+") and #val == 1 then
-        err = true
-      end
-      if val:match("^0%d") then
-        err = true
-      end
-      ::end_label::
-      if err then
-        local s_pos = Pos.index_to_pos(start, content)
-        local e_pos = Pos.index_to_pos(index, content)
-        local token = content:sub(start, index)
-        return TokenizeResult.err({
-          path = path,
-          content = content,
-          s_index = start,
-          e_index = index,
-          err = ("Malformed number '%s'"):format(token),
-          kind = ErrLocKind.SYNTAX,
-          s_pos = s_pos,
-          e_pos = e_pos,
-        })
-      else
-        local s_pos = Pos.index_to_pos(start, content)
-        local e_pos = Pos.index_to_pos(index, content)
-        tokens:push({
-          kind = TokenKind.NUMBER,
-          val = val,
-          s_pos = s_pos,
-          e_pos = e_pos,
-          s_index = start,
-          e_index = index,
-        })
-      end
+      local s_pos = Pos.index_to_pos(start, content)
+      local e_pos = Pos.index_to_pos(index, content)
+      tokens:push({
+        kind = TokenKind.INTEGER,
+        val = val,
+        s_pos = s_pos,
+        e_pos = e_pos,
+        s_index = start,
+        e_index = index,
+      })
     elseif current_char == "+" then
       local pos = Pos.index_to_pos(index, content)
       tokens:push({

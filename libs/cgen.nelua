@@ -8,64 +8,55 @@ local ErrLoc = require ".errloc"
 local lang_info = require ".lang_info"
 
 local Cgen = @record{
-  ast: *Parser.ScopeNode,
+  ast: *Parser.Node,
   includes: hashmap(string, boolean),
 }
 
-local Cgen.gen_scope: function(self: *Cgen, scope: *Parser.ScopeNode): string
+local Cgen.gen_scope: function(self: *Cgen, scope: *Parser.Node): string
 
-function Cgen:gen_type(typ: Parser.Type): string
-  if typ:is_primitive() then
-    local primitive = typ:get_primitive()
-    if primitive.is_integer then
-      self.includes["stdint.h"] = true
-    end
-    local name = primitive.name
-    if name == "void" then
-      return "void"
-    elseif name == "int64" then
-      return "int64_t"
-    end
+function Cgen:gen_type(typ: string): string
+  if typ == "void" then
+    return "void"
+  elseif typ == "i64" then
+    return "int64_t"
+  elseif typ == "i32" then
+    return "int32_t"
   end
   error("TODO: Cgen:gen_type")
   return
 end
 
-function Cgen:gen_fn_def(node: *Parser.FnDefNode): string
+function Cgen:gen_fn_def(node: *Parser.Node): string
   assert(node)
 
   local sb: stringbuilder
 
-  sb:write(self:gen_type(node.return_type), " ")
+  sb:write(self:gen_type(node.fn_def_return_type), " ")
 
   local fn_name: string
-  if node.name == "main" then
+  if node.fn_def_name == "main" then
     fn_name = "main"
   else
-    local name_matched, name_seq = node.scope.path:match("/?(.-)%.mani")
+    local name_matched, name_seq = node.scope.scope_path:match("/?(.-)%.mani")
     assert(name_matched)
-    fn_name = name_seq[1] .. "_" .. node.name
+    fn_name = name_seq[1] .. "_" .. node.fn_def_name
   end
   sb:write(fn_name, "() {\n")
-  local fn_body = self:gen_scope(node.body)
+  local fn_body = self:gen_scope(node.fn_def_body)
   sb:write(fn_body)
   sb:write("\n}")
   return sb:promote()
 end
 
-function Cgen:gen_expr(node: Parser.ExprNode): string
-  if node:is_str_lit() then
-    local str = node:get_str_lit()
-    return "((" .. lang_info.NAME .. "_string){" .. '"' .. str.content .. '",' .. str.len .. "})"
-  elseif node:is_number_lit() then
-    local num = node:get_number_lit()
-    return num.val
-  elseif node:is_paren() then
-    local paren = node:get_paren()
-    return "(" .. self:gen_expr(paren.val) .. ")"
-  elseif node:is_binary() then
-    local binary = node:get_binary()
-    return self:gen_expr(binary.left) .. " " .. binary.operator.val .. " " .. self:gen_expr(binary.right)
+function Cgen:gen_expr(node: Parser.Node): string
+  if node:is(Parser.NodeKind.STRING) then
+    return "((" .. lang_info.NAME .. "_string){" .. '"' .. node.str_content .. '",' .. node.str_len .. "})"
+  elseif node:is(Parser.NodeKind.INTEGER) then
+    return node.int_val
+  elseif node:is(Parser.NodeKind.PAREN) then
+    return "(" .. self:gen_expr(node.paren_val) .. ")"
+  elseif node:is(Parser.NodeKind.BINARY) then
+    return self:gen_expr(node.binary_left) .. " " .. node.binary_operator.val .. " " .. self:gen_expr(node.binary_right)
   else
     error(("Unhandled expr type: %s"):format(node:is()))
   end
@@ -73,44 +64,44 @@ function Cgen:gen_expr(node: Parser.ExprNode): string
   return
 end
 
-function Cgen:gen_println(args: sequence(Parser.ExprNode)): string
+function Cgen:gen_println(args: sequence(*Parser.Node)): string
   self.includes["stdio.h"] = true
-  assert(args[1]:is_str_lit())
+  assert(args[1]:is(Parser.NodeKind.STRING))
   local sb: stringbuilder
-  sb:write('printf("', args[1]:get_str_lit().content, '\\n")')
+  sb:write('printf("', args[1].str_content, '\\n")')
   return sb:promote()
 end
 
-function Cgen:gen_fn_call(node: *Parser.FnCallNode): string
+function Cgen:gen_fn_call(node: *Parser.Node): string
   assert(node)
 
   local sb: stringbuilder
 
-  if node.name == "println" then
-    sb:write(self:gen_println(node.args))
+  if node.fn_call_name == "println" then
+    sb:write(self:gen_println(node.fn_call_args))
   else
     error()
   end
   return sb:promote()
 end
 
-Cgen.gen_scope = function(self: *Cgen, scope: *Parser.ScopeNode): string
-  assert(scope)
+Cgen.gen_scope = function(self: *Cgen, scope: *Parser.Node): string
+  assert(scope and scope.kind == Parser.NodeKind.SCOPE)
 
   local sb: stringbuilder
-  for i, child in ipairs(scope.children) do
-    if child:is_comment() then
+  for i, child in ipairs(scope.scope_children) do
+    if child:is(Parser.NodeKind.COMMENT) then
       -- do nothing
-    elseif child:is_fn_def() then
-      sb:write(self:gen_fn_def(child:get_fn_def()))
-    elseif child:is_fn_call() then
-      sb:write(self:gen_fn_call(child:get_fn_call()), ";")
-    elseif child:is_return_stmt() then
-      sb:write("return ", self:gen_expr(child:get_return_stmt().val), ";")
+    elseif child:is(Parser.NodeKind.FN_DEF) then
+      sb:write(self:gen_fn_def(child))
+    elseif child:is(Parser.NodeKind.FN_CALL) then
+      sb:write(self:gen_fn_call(child), ";")
+    elseif child:is(Parser.NodeKind.RETURN) then
+      sb:write("return ", self:gen_expr(child.return_val), ";")
     else
-      error( ("Unhandle node type: %s"):format(child:is()) )
+      error(("Unhandle node type: %d"):format(child.kind))
     end
-    if i ~= #scope.children then
+    if i ~= #scope.scope_children then
       sb:write("\n")
     end
   end
@@ -175,7 +166,7 @@ function Cgen:gen(): string
 return sb:promote()
 end
 
-function Cgen.new(ast: *Parser.ScopeNode): *Cgen
+function Cgen.new(ast: *Parser.Node): *Cgen
   assert(ast)
 
   local cgen = new(Cgen)
